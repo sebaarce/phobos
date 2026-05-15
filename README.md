@@ -11,7 +11,7 @@ Phobos es un orquestador SDD (Spec-Driven Delivery) compuesto por 6 agentes espe
 - [Qué es esto](#qué-es-esto)
 - [Construcción — historial](#construcción--historial)
 - [Comandos que se usaron](#comandos-que-se-usaron)
-- [Instalación global (`npm link`)](#instalación-global-npm-link)
+- [Instalación](#instalación)
 - [Uso](#uso)
 - [El sistema Phobos en detalle](#el-sistema-phobos-en-detalle)
 - [Desinstalación](#desinstalación)
@@ -32,7 +32,13 @@ Tres piezas conectadas:
 
 3. **Los templates** — copia limpia de `.opencode/` y `vault/` en `scripts/templates/` que el CLI usa para bootstrappear proyectos nuevos.
 
-Todo es local. Nada está publicado en npm. Se instala globalmente con `npm link` para que `npx phobos` funcione desde cualquier carpeta del sistema.
+Disponible públicamente en **[github.com/sebaarce/phobos](https://github.com/sebaarce/phobos)**. Lo más rápido para usarlo:
+
+```bash
+npx github:sebaarce/phobos
+```
+
+No requiere clonar el repo ni `npm link`. Cada vez que corrés ese comando, npx descarga (o usa cache) la última versión de `main` desde GitHub.
 
 ---
 
@@ -158,7 +164,31 @@ npx autoskills                      # (opcional) generar skills/ del proyecto
 
 ---
 
-## Instalación global (`npm link`)
+## Instalación
+
+### Opción A — Desde GitHub (recomendado, sin setup)
+
+El repo es público en **[github.com/sebaarce/phobos](https://github.com/sebaarce/phobos)**. Desde cualquier carpeta:
+
+```bash
+npx github:sebaarce/phobos
+```
+
+npx descarga el paquete (o usa cache) y ejecuta el bin `phobos`. La primera vez tarda unos segundos clonando; las siguientes son instantáneas.
+
+Para forzar la última versión (sin cache):
+```bash
+npx --no-cache github:sebaarce/phobos
+```
+
+Para pinear a un commit/tag/branch específico:
+```bash
+npx github:sebaarce/phobos#main
+npx github:sebaarce/phobos#v0.1.0
+npx github:sebaarce/phobos#abc1234
+```
+
+### Opción B — `npm link` (para desarrollo local)
 
 Una sola vez por máquina:
 
