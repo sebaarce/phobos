@@ -112,6 +112,50 @@ Si `research.md` ya existe en `vault/memory/tasks/<slug>/`:
 - El research representa el estado del análisis al momento de generarse. No se acumula entre iteraciones.
 - Si la tarea fue parcialmente investigada y querés preservar partes, hacé append explícito a una sección `## Iteración N — YYYY-MM-DD` con el nuevo contenido, manteniendo lo anterior.
 
+## Skills disponibles (opt-in — usalas cuando aplican)
+
+OpenCode auto-descubre skills instaladas en `.opencode/skills/` y `.agents/skills/` del proyecto. **No las invocás por inercia** — las usás cuando el dominio de la tarea coincide con lo que la skill aporta.
+
+### `impeccable` — investigación de UI / diseño
+
+Si está instalada (`.opencode/skills/impeccable/SKILL.md` existe), aporta vocabulario de diseño, 27 anti-patterns frontend detectables, y workflows tipo `audit` / `polish` / `critique` referenciables desde dentro de la skill.
+
+**Cuándo usarla** (uno o más):
+
+- La tarea menciona: **estilos, design tokens, paleta de colores, tipografía, espaciado, radios, sombras, motion, breakpoints, responsive, UX writing, microcopy, jerarquía visual, accesibilidad WCAG**.
+- El research toca archivos `.css`, `.scss`, `tailwind.config.*`, `theme.*`, `styles/**`, `tokens/**`, `*.stories.*`.
+- La tarea pide **comparar** una implementación contra un mockup, Figma, o sistema de diseño.
+- La tarea pide **auditar** una página/componente por calidad visual o de UX.
+
+**Cómo usarla** (concreto):
+
+1. Verificá presencia con `ls .opencode/skills/impeccable/SKILL.md` antes de citarla en `research.md`.
+2. Leé `SKILL.md` y los archivos referenciados en `.opencode/skills/impeccable/reference/` para alinear el vocabulario y los anti-patterns que vas a aplicar.
+3. En `research.md`, agregá una sección dedicada cuando el dominio aplique:
+
+```markdown
+## Diseño / UI (skill: impeccable)
+- **Tokens existentes**: `src/styles/tokens.css:12-48` — paleta + espaciado + radios.
+- **Anti-patterns detectados** (vocab impeccable):
+  - "Magic spacing" en `src/components/Card.tsx:34` → usa `margin: 17px` (fuera de la escala 4/8/12/16/24).
+  - "Color drift" en `src/pages/Login.tsx:88` → hex literal `#0a6b73` en vez de var(--color-primary).
+- **Comparación contra Figma** (si aplicó):
+  - Primary teal Figma: `#087781` — actual `#01767C` → drift Δ.
+  - Tipografía Figma: `Inter 14/20` — actual `Inter 14/24` → desalineado.
+```
+
+4. **Si la skill NO está instalada** y la tarea es claramente de diseño, anotalo en "Preguntas abiertas" del research:
+   > Para auditoría exhaustiva de UI conviene instalar `impeccable` (`.opencode/skills/impeccable/`). El usuario puede correr `npx github:sebaarce/phobos` y marcarlo en los siguientes pasos.
+
+**Cuándo NO usarla**:
+- Tarea backend pura (APIs, DB, jobs, infra) → no aplica, no la cites.
+- Tarea de testing (cobertura, regresiones) → no aplica, no la cites.
+- Tarea de docs no-visuales (README de instalación, ADRs técnicas) → no aplica.
+
+### Otras skills
+
+Si en `.opencode/skills/` o `.agents/skills/` ves otras skills relevantes al dominio de la tarea (ej: `obsidian-markdown`, `defuddle`, etc.), aplicá el mismo criterio: **citalas en research.md cuando aportan vocabulario o validación al análisis, no por inercia**.
+
 ## Seguridad 1 — Permisos, rutas y slug
 
 ### Permisos efectivos

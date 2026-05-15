@@ -330,6 +330,110 @@ async function installObsidianSkills() {
   console.log(dim('    echo ".agents/skills/" >> .gitignore\n'));
 }
 
+async function installImpeccable() {
+  // Impeccable — skill de diseño (pbakaus/impeccable).
+  // Layout del repo: .opencode/skills/impeccable/{SKILL.md, reference/, scripts/}
+  // No es publicable vía `npx skills add` (el repo tiene un solo skill en path no-estándar).
+  // Estrategia: git clone shallow + copy del subdirectorio, sin requerir git config global.
+
+  console.log('\n' + cyan('▸ ') + bold('Instalar Impeccable (skill de diseño per-proyecto)'));
+  console.log(dim('  destino: .opencode/skills/impeccable/  (en este proyecto)'));
+  console.log(dim('  fuente:  github.com/pbakaus/impeccable'));
+  console.log(dim('  qué hace: vocabulario + 27 anti-patterns + workflows de auditoría de UI.'));
+  console.log('');
+
+  const { index } = await tuiSelect(
+    '¿Instalar impeccable en este proyecto?',
+    [
+      `Sí, instalar  ${dim('(git clone + copy a .opencode/skills/impeccable/)')}`,
+      'Cancelar',
+    ],
+    0,
+  );
+
+  if (index === 1) {
+    console.log(dim('  ⊘ saltado.\n'));
+    return;
+  }
+
+  const dest = '.opencode/skills/impeccable';
+  if (await fileExists(dest)) {
+    const { index: overwriteIdx } = await tuiSelect(
+      `Ya existe ${dest}. ¿Sobrescribir?`,
+      ['Sobrescribir (borra el existente y reinstala)', 'Cancelar'],
+      1,
+    );
+    if (overwriteIdx === 1) {
+      console.log(dim('  ⊘ saltado.\n'));
+      return;
+    }
+  }
+
+  // Asegurar que .opencode/skills/ exista
+  await mkdir('.opencode/skills', { recursive: true }).catch(() => {});
+
+  // Step 1: git clone shallow a tmp
+  const tmpDir = '.tmp-impeccable-' + Date.now();
+  const cloneCode = await runChild(
+    'git',
+    ['clone', '--depth', '1', 'https://github.com/pbakaus/impeccable.git', tmpDir],
+    'Clonar impeccable (shallow)',
+  );
+  if (cloneCode !== 0) {
+    console.log(yellow('  ⚠ Falló el git clone. Verificá que git esté en PATH y haya internet.\n'));
+    return;
+  }
+
+  // Step 2: copiar .opencode/skills/impeccable/ del tmp al destino
+  const src = join(tmpDir, '.opencode', 'skills', 'impeccable');
+  if (!await fileExists(src)) {
+    console.log(yellow(`  ⚠ El repo clonado no tiene ${src}. Quizás el upstream cambió.\n`));
+    await rmrf(tmpDir);
+    return;
+  }
+
+  // Borrar destino previo (si overwrite fue confirmado arriba)
+  if (await fileExists(dest)) await rmrf(dest);
+
+  // Copia recursiva multiplataforma vía spawn
+  const copyCmd = platform === 'win32'
+    ? { cmd: 'xcopy', args: [src.replace(/\//g, '\\'), dest.replace(/\//g, '\\'), '/E', '/I', '/Y', '/Q'] }
+    : { cmd: 'cp', args: ['-r', src, dest] };
+
+  const copyCode = await runChild(copyCmd.cmd, copyCmd.args, 'Copiar .opencode/skills/impeccable/');
+  await rmrf(tmpDir);
+
+  if (copyCode !== 0) {
+    console.log(yellow('  ⚠ Falló la copia. Revisá permisos.\n'));
+    return;
+  }
+
+  console.log(green('\n  ✓ Impeccable instalado en ') + cyan(dest));
+  console.log(dim('\n  OpenCode auto-descubrirá la skill al reiniciar.'));
+  console.log(dim('  Verificá con:  ') + cyan('opencode debug skill'));
+  console.log(dim('  Tip CLI extra (sin instalar):  ') + cyan('npx impeccable detect src/'));
+  console.log(dim('  Tip: si no querés commitear la skill, agregá a .gitignore:'));
+  console.log(dim('    echo ".opencode/skills/impeccable/" >> .gitignore\n'));
+}
+
+// Helper rmrf multiplataforma sin dependencias (Node 16.14+ tiene fs.rm)
+async function rmrf(path) {
+  try {
+    const { rm } = await import('node:fs/promises');
+    await rm(path, { recursive: true, force: true });
+  } catch {
+    // Fallback al CLI del SO
+    const cmd = platform === 'win32'
+      ? { cmd: 'cmd', args: ['/c', 'rmdir', '/S', '/Q', path.replace(/\//g, '\\')] }
+      : { cmd: 'rm', args: ['-rf', path] };
+    await new Promise((resolve) => {
+      const p = spawn(cmd.cmd, cmd.args, { stdio: 'ignore', shell: true });
+      p.on('close', () => resolve());
+      p.on('error', () => resolve());
+    });
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Utilidades
 // ═══════════════════════════════════════════════════════════════════
@@ -1643,7 +1747,8 @@ async function main() {
     '\n¿Querés correr algún siguiente paso ahora?',
     [
       { value: 'autoskills',       label: 'npx autoskills  ' + dim('— skills del proyecto en ./skills/') },
-      { value: 'obsidian-skills',  label: 'obsidian-skills  ' + dim('— git clone a .opencode/skills/ del proyecto') },
+      { value: 'obsidian-skills',  label: 'obsidian-skills  ' + dim('— vault/notes en Obsidian-flavored markdown') },
+      { value: 'impeccable',       label: 'impeccable  ' + dim('— skill de diseño/UI (vocab + anti-patterns + auditorías)') },
       { value: 'opencode',         label: 'Abrir OpenCode  ' + dim('— lanzar el TUI') },
     ],
     [],
@@ -1666,6 +1771,8 @@ async function main() {
       await runChild('npx', ['autoskills'], 'Generar skills/ del proyecto');
     } else if (step === 'obsidian-skills') {
       await installObsidianSkills();
+    } else if (step === 'impeccable') {
+      await installImpeccable();
     } else if (step === 'opencode') {
       await runChild('opencode', [], 'Abrir OpenCode');
     }
