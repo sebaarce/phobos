@@ -69,7 +69,7 @@ Aprovechando `permission.edit` con globs:
 
 ### 5. Comandos custom
 - `/adapt-agents` — corre después de `/init` de OpenCode. Adapta `AGENTS.md` agregando secciones sobre Phobos.
-- `/models-wizard` — redirige a `npx phobos` (la UX rica vive en el CLI).
+- `/models-wizard` — redirige a `npx github:sebaarce/phobos` (la UX rica vive en el CLI).
 
 ### 6. Script de configuración de modelos
 Empezó como prompt en Phobos, después migró a un Node.js script porque:
@@ -271,7 +271,7 @@ mi-proyecto/
 │   │   └── README.md       # docs del sistema
 │   └── command/
 │       ├── adapt-agents.md # /adapt-agents
-│       └── models-wizard.md# /models-wizard (redirige a npx phobos)
+│       └── models-wizard.md# /models-wizard (redirige a npx github:sebaarce/phobos)
 ├── AGENTS.md           # generado por /init de OpenCode
 ├── vault/              # memoria persistente
 │   ├── SCHEMA.md       # reglas del vault

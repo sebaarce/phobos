@@ -1,5 +1,5 @@
 ---
-description: Redirige al script CLI npx phobos para configurar modelos de cada agente.
+description: Redirige al script CLI npx github:sebaarce/phobos para configurar modelos de cada agente.
 agent: phobos
 ---
 
@@ -8,7 +8,7 @@ Decile al usuario, literalmente:
 > Para configurar los modelos de cada agente, corré este comando en tu terminal (fuera de OpenCode):
 >
 > ```bash
-> npx phobos
+> npx github:sebaarce/phobos
 > ```
 >
 > Si nunca corriste `npm link` en este proyecto, hacé esto primero:

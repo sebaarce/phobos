@@ -8,7 +8,8 @@
  * Uso:
  *   node scripts/configure-models.mjs
  *   npm run models
- *   npx phobos   (tras npm link)
+ *   npx github:sebaarce/phobos   (canónico — sin instalación)
+ *   npx phobos                  (solo si hiciste npm link local)
  *
  * Requiere: OpenCode CLI en PATH + Node >= 18. Sin dependencias externas.
  */
@@ -539,7 +540,7 @@ async function detect() {
     console.log('  ' + dim('phobos necesita el CLI de OpenCode para'));
     console.log('  ' + dim('descubrir providers y modelos disponibles.'));
     console.log('');
-    console.log('  Instalá OpenCode y volvé a correr:  ' + cyan('npx phobos'));
+    console.log('  Instalá OpenCode y volvé a correr:  ' + cyan('npx github:sebaarce/phobos'));
     console.log('  ' + dim('→ ') + cyan('https://opencode.ai'));
     console.log('');
     rl.close();
@@ -1518,7 +1519,7 @@ function showHappyGoodbye() {
   console.log(dim('         ┗━━━━━━━━━━━┛'));
   console.log('');
   console.log('   ' + bold(green('¡Listo!')) + '  Buen vuelo con Phobos.');
-  console.log(dim('   Configurá nuevos modelos cuando quieras con:  ') + cyan('npx phobos'));
+  console.log(dim('   Configurá nuevos modelos cuando quieras con:  ') + cyan('npx github:sebaarce/phobos'));
   console.log('');
 }
 
@@ -1534,7 +1535,7 @@ function showSadGoodbye() {
   console.log(dim('         ┗━━━━━━━━━━━┛'));
   console.log('');
   console.log(dim('   Phobos no se instaló en este proyecto.'));
-  console.log(dim('   Volvé cuando quieras con:  ') + cyan('npx phobos'));
+  console.log(dim('   Volvé cuando quieras con:  ') + cyan('npx github:sebaarce/phobos'));
   console.log('');
 }
 
@@ -1591,7 +1592,7 @@ async function main() {
     console.log('  ' + bold('Para conectar uno:'));
     console.log('    ' + dim('1.') + ' Iniciá OpenCode con  ' + cyan('opencode'));
     console.log('    ' + dim('2.') + ' Agregá un proveedor con  ' + cyan('/connect'));
-    console.log('    ' + dim('3.') + ' Volvé a correr  ' + cyan('npx phobos'));
+    console.log('    ' + dim('3.') + ' Volvé a correr  ' + cyan('npx github:sebaarce/phobos'));
     console.log('');
     rl.close();
     exit(1);
