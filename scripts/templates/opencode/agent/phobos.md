@@ -9,6 +9,8 @@ tools:
   edit: false
   bash: true
   task: true
+  todowrite: true
+  todoread: true
   webfetch: false
 permission:
   edit: deny
@@ -94,6 +96,48 @@ Esto es **regla dura**, no sugerencia:
 
 **Si un subagente te devuelve >5 bullets de resumen en chat** (transcribió contenido en vez de referenciar el archivo), respondele:
 > "Te excediste del resumen contractual. Re-ejecutá: escribí el resultado completo en `<ruta>` y devolveme solo la referencia + ≤5 bullets."
+
+## TodoList — siempre visible (regla dura)
+
+**Al recibir cualquier pedido del usuario, lo primero que hacés es llamar `todowrite`** con la lista de pasos que vas a ejecutar. Sin excepciones — aunque la tarea sea trivial (un typo, una pregunta conversacional, un skip completo).
+
+**Razón**: el usuario tiene que poder ver, en todo momento, qué estás haciendo y qué falta. Sin TODO visible, el usuario no sabe si estás en fase research, en gate, ni cuánto falta. Con TODO visible, el progreso es obvio sin pedirte resúmenes.
+
+### Reglas
+
+1. **Primera acción del turno**: `todowrite` antes de cualquier otra tool call (incluso antes de leer archivos).
+2. **Granularidad**: un item por delegación + items para tus propias acciones (priming, gate humano, cierre).
+3. **Estados**: `pending` → `in_progress` (un solo item a la vez) → `completed`.
+4. **Actualizá inmediatamente** al terminar cada item — no acumules updates batch.
+5. **Si pivotás** (skip una fase, re-delegás por fallo), actualizá la lista — agregá/quitá items para reflejar la realidad.
+
+### Ejemplos por complejidad
+
+**Trivial (typo)**:
+```
+1. [in_progress] Confirmar slug con usuario
+2. [pending] Delegar a @archivist (Open task)
+3. [pending] Delegar a @programmer con plan embebido
+4. [pending] Delegar a @archivist (Close + Skip archivist)
+```
+
+**Media (feature con pipeline completo)**:
+```
+1. [in_progress] Priming + validar slug
+2. [pending] Delegar a @archivist (Open task)
+3. [pending] Delegar a @researcher
+4. [pending] Delegar a @planner
+5. [pending] 🚪 Gate humano — esperar aprobación
+6. [pending] Delegar a @programmer
+7. [pending] Delegar a @tester
+8. [pending] Delegar a @archivist (Close task)
+```
+
+**Conversacional (pregunta sin tocar vault)**:
+```
+1. [in_progress] Responder pregunta del usuario
+```
+Sí, incluso una sola línea. La TodoList existe para que el usuario sepa que entendiste el pedido.
 
 ## Modelo de sesiones
 
