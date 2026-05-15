@@ -1188,19 +1188,30 @@ async function scanForUpdates() {
   return result;
 }
 
-async function applyUpdate(file) {
+async function applyUpdate(file, { preserveLocalModel = true } = {}) {
   const tmpl = await readFile(file.templatePath, 'utf-8');
   let content = tmpl;
 
-  if (file.ignoreModel) {
+  if (file.ignoreModel && preserveLocalModel) {
     const local = await readFile(file.localPath, 'utf-8');
     const m = local.match(/^model:\s*(.+)$/m);
     if (m) {
       content = tmpl.replace(/^model:\s*.+$/m, `model: ${m[1].trim()}`);
     }
   }
+  // Si preserveLocalModel=false, dejamos el modelo del template intacto.
 
   await writeFile(file.localPath, content);
+}
+
+async function getTemplateModel(file) {
+  try {
+    const tmpl = await readFile(file.templatePath, 'utf-8');
+    const m = tmpl.match(/^model:\s*(.+)$/m);
+    return m ? m[1].trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 async function copyTemplateFile(file) {
@@ -1244,25 +1255,47 @@ async function runUpdateWizard(updates) {
     const f = updates.outdated[i];
     const label = `[${i + 1}/${updates.outdated.length}] ${basename(f.dst)}`;
 
+    // Leer modelos para mostrar la diferencia si la hay
+    const localContent = await readFile(f.localPath, 'utf-8');
+    const localModelMatch = localContent.match(/^model:\s*(.+)$/m);
+    const localModel = localModelMatch ? localModelMatch[1].trim() : '(sin model)';
+    const templateModel = await getTemplateModel(f);
+    const modelsDiffer = f.ignoreModel && templateModel && localModel !== templateModel;
+
     while (true) {
+      const options = [
+        `Actualizar y preservar mi modelo  ${dim('(' + localModel + ')')}`,
+      ];
+      if (modelsDiffer) {
+        options.push(`Actualizar y usar el modelo del template  ${dim('(' + templateModel + ')')}`);
+      }
+      options.push('Ver diff antes de decidir');
+      options.push('Saltar este');
+
       const { index } = await tuiSelect(
         '\n' + bold(label) + dim('  — tiene cambios respecto al template'),
-        [
-          'Actualizar (preserva mi modelo)',
-          'Ver diff antes de decidir',
-          'Saltar este',
-        ],
+        options,
         0,
       );
 
-      if (index === 0) {
-        await applyUpdate(f);
-        console.log(green('  ✓ ' + basename(f.dst) + ' actualizado.'));
+      // Resolver acción según índices dinámicos
+      const idxPreserve = 0;
+      const idxAcceptTemplate = modelsDiffer ? 1 : -1;
+      const idxDiff = modelsDiffer ? 2 : 1;
+      const idxSkip = modelsDiffer ? 3 : 2;
+
+      if (index === idxPreserve) {
+        await applyUpdate(f, { preserveLocalModel: true });
+        console.log(green('  ✓ ' + basename(f.dst) + ' actualizado.') + dim(' (modelo preservado: ' + localModel + ')'));
         break;
-      } else if (index === 1) {
+      } else if (index === idxAcceptTemplate) {
+        await applyUpdate(f, { preserveLocalModel: false });
+        console.log(green('  ✓ ' + basename(f.dst) + ' actualizado.') + dim(' (modelo cambiado a: ' + templateModel + ')'));
+        break;
+      } else if (index === idxDiff) {
         showAgentDiff(f);
         // loop back para volver a preguntar
-      } else {
+      } else if (index === idxSkip) {
         console.log(dim('  ⊘ ' + basename(f.dst) + ' sin tocar.'));
         break;
       }
