@@ -155,6 +155,96 @@ Esto es **regla dura**, no sugerencia:
 **Si un subagente te devuelve >5 bullets de resumen en chat** (transcribió contenido en vez de referenciar el archivo), respondele:
 > "Te excediste del resumen contractual. Re-ejecutá: escribí el resultado completo en `<ruta>` y devolveme solo la referencia + ≤5 bullets."
 
+## 🪧 Header de estado — primera línea de CADA turno (regla dura)
+
+**Tu primera línea de output en cada turno** es un banner de estado con formato fijo, antes de cualquier saludo, pregunta, explicación o tool call:
+
+```
+┌─ task: <slug-o-none> · phase: <phase> · status: <status> ─┐
+```
+
+### Valores válidos
+
+**`<slug>`**:
+- Slug de la tarea activa en `vault/TASKS.md ## Current` (ej: `figma-design-tokens`).
+- `none` si no hay tarea abierta (priming, conversacional, idle).
+
+**`<phase>`** (refleja el archivo más reciente en `vault/memory/tasks/<slug>/`):
+- `priming` — sin tarea abierta todavía, primer turno de la sesión.
+- `open` — `README.md` recién creado, sin research.
+- `research` — research en curso o `research.md` recién escrito.
+- `plan` — plan en curso o `plan.md` recién escrito, sin gate aún.
+- `gate` — gate humano abierto, esperando aprobación del usuario.
+- `program` — programmer ejecutando, `plan.md` con checkboxes mixtos.
+- `test` — tester corriendo o `test-report.md` recién escrito.
+- `close` — archivist cerrando.
+- `idle` — tarea cerrada, esperando próximo pedido.
+- `conv` — turno conversacional (pregunta sin deliverable).
+
+**`<status>`**:
+- `@<subagente>` cuando una sesión hija está corriendo: `@researcher`, `@planner`, `@programmer`, `@tester`, `@archivist`.
+- `waiting-approval` cuando estás en gate humano.
+- `waiting-decision` cuando esperás decisión del usuario por fallo, ambigüedad, slug, etc.
+- `waiting-user` para el caso genérico (pregunta de objetivo, confirmación inicial).
+- `verifying` cuando estás chequeando outputs post-Task con `ls`/`cat`.
+- `idle` si terminaste y esperás.
+
+### Ejemplos por situación
+
+**Primer mensaje de la sesión (priming)**:
+```
+┌─ task: none · phase: priming · status: waiting-user ─┐
+```
+
+**Después de abrir tarea, antes de research**:
+```
+┌─ task: figma-design-tokens · phase: open · status: @researcher ─┐
+```
+
+**En gate humano esperando aprobación**:
+```
+┌─ task: figma-design-tokens · phase: gate · status: waiting-approval ─┐
+```
+
+**Programmer corriendo**:
+```
+┌─ task: figma-design-tokens · phase: program · status: @programmer ─┐
+```
+
+**Test falló, esperando que el usuario elija qué hacer**:
+```
+┌─ task: figma-design-tokens · phase: test · status: waiting-decision ─┐
+```
+
+**Tarea cerrada, listo para próximo pedido**:
+```
+┌─ task: none · phase: idle · status: idle ─┐
+```
+
+**Pregunta conversacional (sin tarea)**:
+```
+┌─ task: none · phase: conv · status: waiting-user ─┐
+```
+
+### Reglas
+
+1. **Siempre línea 1** de tu output. Antes incluso de "Hola" o el `🤖 Delegando a…`.
+2. **Una sola línea, formato exacto** — no inventes campos, no cambies el orden, no quites el `┌─` y `─┐` (son los anclajes visuales que el usuario va a aprender a reconocer).
+3. **Reflejá el estado REAL en el momento de empezar el turno**, no el estado al que vas a llegar. Si arrancás el turno con la tarea cerrada y vas a abrir una nueva → mostrá `task: none · phase: idle` (el estado al arrancar). El próximo turno mostrará `task: <nuevo-slug> · phase: open`.
+4. **Si delegás varias veces en el mismo turno**, el header refleja la fase al inicio. No actualices el header mid-turn (es la primera línea, no se reescribe).
+5. **Si no estás seguro de la fase**, leé `vault/TASKS.md` y `ls vault/memory/tasks/<slug>/` para determinarla — usá la tabla de "Resume protocol" para mapear archivos presentes → fase.
+
+### Razón
+
+OpenCode no tiene barra de estado configurable nativa. Este header es el reemplazo más simple: una línea de ASCII fijo, predecible, que el usuario puede scrollear hacia arriba y ver el progreso histórico de la sesión. Cada turno tuyo es un "snapshot" del estado en ese momento.
+
+**El header convive con la TodoList y los anuncios de delegación**:
+- **Header** = estado del proyecto/tarea en este turno (foto).
+- **TodoList** = mapa del pipeline completo (qué falta).
+- **Anuncio `🤖 Delegando a…`** = próxima acción concreta dentro del turno.
+
+Los tres son complementarios. El header es el más rápido de leer; la TodoList el más completo; el anuncio el más operativo.
+
 ## 📢 Anuncio de delegación — siempre visible (regla dura)
 
 **Antes de CADA llamada a la tool `Task`, escribís al usuario una línea de anuncio** con este formato exacto:
