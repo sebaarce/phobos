@@ -266,61 +266,67 @@ function runChild(cmd, args, label) {
 }
 
 async function installObsidianSkills() {
-  // Per-proyecto: .opencode/skills/obsidian-skills/ (relativo al cwd)
-  const skillsRoot = join(cwd(), '.opencode', 'skills');
-  const target = join(skillsRoot, 'obsidian-skills');
-  const targetRel = '.opencode/skills/obsidian-skills';
-  const repoUrl = 'https://github.com/kepano/obsidian-skills.git';
+  // Instalación per-proyecto vía Skills CLI (npx skills add).
+  // El ecosistema instala cada skill individualmente en .agents/skills/<skill>/SKILL.md
+  // que es donde OpenCode realmente auto-descubre los SKILL.md.
 
-  console.log('\n' + cyan('▸ ') + bold('Instalar obsidian-skills (per-proyecto)'));
-  console.log(dim('  destino: ' + targetRel + '/  (en este proyecto)'));
-
-  if (await fileExists(target)) {
-    console.log(dim('\n  Ya existe ' + targetRel));
-    const choice = await tuiSelect(
-      '¿Qué hacés?',
-      [
-        'Saltar — ya está instalado',
-        'Actualizar (git pull en el repo existente)',
-        'Re-clonar (borrá manualmente primero, después corré esto otra vez)',
-      ],
-      0,
-    );
-    if (choice.index === 1) {
-      await runChild('git', ['-C', target, 'pull', '--ff-only'], 'Actualizar obsidian-skills');
-    } else if (choice.index === 2) {
-      console.log(yellow('\n  Para re-clonar, borrá manualmente y volvé a correr:'));
-      console.log(dim('    rm -rf "' + targetRel + '"  (Unix)'));
-      console.log(dim('    Remove-Item -Recurse -Force "' + targetRel + '"  (PowerShell)'));
-      console.log(dim('    Después: npx phobos\n'));
-    } else {
-      console.log(dim('  ⊘ saltado.\n'));
-    }
-    return;
-  }
-
-  // No existe — crear parent dir .opencode/skills/ y clonar
-  try {
-    await mkdir(skillsRoot, { recursive: true });
-  } catch (err) {
-    console.log(yellow('  ⚠ No pude crear ' + skillsRoot + ': ' + err.message));
-    return;
-  }
-
+  console.log('\n' + cyan('▸ ') + bold('Instalar obsidian-skills (per-proyecto vía Skills CLI)'));
+  console.log(dim('  destino: .agents/skills/<skill>/  (en este proyecto)'));
+  console.log(dim('  fuente:  github.com/kepano/obsidian-skills'));
   console.log('');
-  await runChild('git', ['clone', repoUrl, target], 'Clonar obsidian-skills');
 
-  if (await fileExists(target)) {
-    console.log(dim('\n  Skills disponibles tras la instalación:'));
-    console.log(dim('    · obsidian-markdown  — wikilinks, callouts, embeds, properties'));
-    console.log(dim('    · obsidian-bases     — archivos .base (filtros, fórmulas, vistas)'));
-    console.log(dim('    · json-canvas        — .canvas (diagramas con nodos/edges)'));
-    console.log(dim('    · obsidian-cli       — queries al vault desde CLI'));
-    console.log(dim('    · defuddle           — extraer markdown limpio de URLs'));
-    console.log(dim('\n  OpenCode auto-descubrirá los SKILL.md al reiniciar.'));
-    console.log(dim('\n  Tip: agregalo a .gitignore si NO querés commitear las skills:'));
-    console.log(dim('    echo ".opencode/skills/obsidian-skills/" >> .gitignore'));
+  const skillsToInstall = [
+    { id: 'obsidian-markdown',  desc: 'wikilinks, callouts, embeds, properties' },
+    { id: 'obsidian-bases',     desc: 'archivos .base (filtros, fórmulas, vistas)' },
+    { id: 'json-canvas',        desc: '.canvas (diagramas con nodos/edges)' },
+    { id: 'obsidian-cli',       desc: 'queries al vault desde CLI' },
+    { id: 'defuddle',           desc: 'extraer markdown limpio de URLs' },
+  ];
+
+  // Submenu: instalar todas o elegir
+  const { index } = await tuiSelect(
+    '¿Cuáles instalar?',
+    [
+      `Las 5 ${dim('(obsidian-markdown, obsidian-bases, json-canvas, obsidian-cli, defuddle)')}`,
+      'Elegir cuáles (multi-select)',
+      'Cancelar',
+    ],
+    0,
+  );
+
+  if (index === 2) {
+    console.log(dim('  ⊘ saltado.\n'));
+    return;
   }
+
+  let selected;
+  if (index === 0) {
+    selected = skillsToInstall.map(s => s.id);
+  } else {
+    const picks = await tuiMultiSelect(
+      '\nMarcá las que querés instalar:',
+      skillsToInstall.map(s => ({ value: s.id, label: s.id + '  ' + dim('— ' + s.desc) })),
+      ['obsidian-markdown', 'obsidian-bases', 'json-canvas'],
+    );
+    selected = picks;
+  }
+
+  if (selected.length === 0) {
+    console.log(dim('\n  ⊘ ninguna seleccionada.\n'));
+    return;
+  }
+
+  console.log(dim('\n  Instalando ' + selected.length + ' skill(s)...'));
+
+  for (const skill of selected) {
+    const pkg = `kepano/obsidian-skills@${skill}`;
+    await runChild('npx', ['skills', 'add', pkg, '-y'], `Instalar ${skill}`);
+  }
+
+  console.log(dim('\n  OpenCode auto-descubrirá los SKILL.md al reiniciar.'));
+  console.log(dim('  Verificá con:  ') + cyan('opencode debug skill'));
+  console.log(dim('  Tip: si no querés commitear las skills, agregá a .gitignore:'));
+  console.log(dim('    echo ".agents/skills/" >> .gitignore\n'));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1377,7 +1383,14 @@ async function runUpdateWizard(updates) {
   }
 }
 
-async function backupAgents() {
+async function backupAgents(filesToBackup) {
+  // filesToBackup: array de paths relativos al cwd (ej: '.opencode/agent/phobos.md')
+  // Si está vacío, no hace nada.
+  if (!filesToBackup || filesToBackup.length === 0) {
+    console.log(dim('\n  ⊘ Backup omitido — no hay archivos que vayan a modificarse.'));
+    return;
+  }
+
   const now = new Date();
   const ts =
     now.getFullYear().toString() +
@@ -1391,24 +1404,23 @@ async function backupAgents() {
   const backupDir = join(cwd(), backupRel);
   await mkdir(backupDir, { recursive: true });
 
-  const agentsToBackup = ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist'];
   let copied = 0;
-  const skipped = [];
+  const names = [];
 
-  for (const agent of agentsToBackup) {
-    const src = join(cwd(), AGENTS_DIR, `${agent}.md`);
-    const dst = join(backupDir, `${agent}.md`);
+  for (const relPath of filesToBackup) {
+    const filename = basename(relPath);
+    const src = join(cwd(), relPath);
+    const dst = join(backupDir, filename);
     if (await fileExists(src)) {
       const content = await readFile(src, 'utf-8');
       await writeFile(dst, content);
       copied++;
-    } else {
-      skipped.push(agent);
+      names.push(filename);
     }
   }
 
   console.log(green(`\n  ✓ Backup creado: `) + cyan(backupRel + '/'));
-  console.log(dim(`    ${copied} agente(s) copiados${skipped.length ? ' · ' + skipped.length + ' faltantes saltados (' + skipped.join(', ') + ')' : ''}`));
+  console.log(dim(`    ${copied} archivo(s) copiados: ${names.join(', ')}`));
 }
 
 async function runUpdateAll(updates) {
@@ -1433,11 +1445,19 @@ async function ensureUpdated() {
 
   showUpdateStatus(updates);
 
+  const totalOutdated = updates.outdated.length;
+  const totalMissing = updates.missing.length;
+  const totalToTouch = totalOutdated + totalMissing;
+  const detail = [
+    totalOutdated > 0 ? `${totalOutdated} ↻ diferente${totalOutdated > 1 ? 's' : ''}` : null,
+    totalMissing > 0 ? `${totalMissing} ⚠ faltante${totalMissing > 1 ? 's' : ''}` : null,
+  ].filter(Boolean).join(' + ');
+
   const { index } = await tuiSelect(
     '\n¿Qué hacés con las actualizaciones?',
     [
       'Revisar uno por uno (Recomendado)',
-      'Actualizar todo (preserva mis modelos)',
+      `Aplicar todas las actualizaciones pendientes  ${dim('(' + detail + ', preserva mis modelos)')}`,
       'Saltar — no actualizar nada',
     ],
     0,
@@ -1448,13 +1468,21 @@ async function ensureUpdated() {
     return;
   }
 
-  // Antes de hacer cualquier cambio, ofrecer backup
-  const wantsBackup = await tuiYesNo(
-    '\n¿Querés hacer un backup de los agentes actuales antes de actualizar?',
-    true,
-  );
-  if (wantsBackup) {
-    await backupAgents();
+  // Antes de hacer cualquier cambio, ofrecer backup — solo de los archivos que van a cambiar
+  // (outdated). Los inSync no se tocan; los missing no existen aún, no hay nada que respaldar.
+  const filesToBackup = updates.outdated.map(f => f.dst);
+
+  if (filesToBackup.length > 0) {
+    const names = filesToBackup.map(p => basename(p)).join(', ');
+    const wantsBackup = await tuiYesNo(
+      `\n¿Querés hacer un backup de ${filesToBackup.length} archivo${filesToBackup.length > 1 ? 's' : ''} antes de actualizar? ${dim('(' + names + ')')}`,
+      true,
+    );
+    if (wantsBackup) {
+      await backupAgents(filesToBackup);
+    }
+  } else {
+    console.log(dim('\n  (sin archivos modificables — no se ofrece backup)'));
   }
 
   if (index === 0) {
