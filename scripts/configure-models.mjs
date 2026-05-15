@@ -265,6 +265,64 @@ function runChild(cmd, args, label) {
   });
 }
 
+async function installObsidianSkills() {
+  // Per-proyecto: .opencode/skills/obsidian-skills/ (relativo al cwd)
+  const skillsRoot = join(cwd(), '.opencode', 'skills');
+  const target = join(skillsRoot, 'obsidian-skills');
+  const targetRel = '.opencode/skills/obsidian-skills';
+  const repoUrl = 'https://github.com/kepano/obsidian-skills.git';
+
+  console.log('\n' + cyan('▸ ') + bold('Instalar obsidian-skills (per-proyecto)'));
+  console.log(dim('  destino: ' + targetRel + '/  (en este proyecto)'));
+
+  if (await fileExists(target)) {
+    console.log(dim('\n  Ya existe ' + targetRel));
+    const choice = await tuiSelect(
+      '¿Qué hacés?',
+      [
+        'Saltar — ya está instalado',
+        'Actualizar (git pull en el repo existente)',
+        'Re-clonar (borrá manualmente primero, después corré esto otra vez)',
+      ],
+      0,
+    );
+    if (choice.index === 1) {
+      await runChild('git', ['-C', target, 'pull', '--ff-only'], 'Actualizar obsidian-skills');
+    } else if (choice.index === 2) {
+      console.log(yellow('\n  Para re-clonar, borrá manualmente y volvé a correr:'));
+      console.log(dim('    rm -rf "' + targetRel + '"  (Unix)'));
+      console.log(dim('    Remove-Item -Recurse -Force "' + targetRel + '"  (PowerShell)'));
+      console.log(dim('    Después: npx phobos\n'));
+    } else {
+      console.log(dim('  ⊘ saltado.\n'));
+    }
+    return;
+  }
+
+  // No existe — crear parent dir .opencode/skills/ y clonar
+  try {
+    await mkdir(skillsRoot, { recursive: true });
+  } catch (err) {
+    console.log(yellow('  ⚠ No pude crear ' + skillsRoot + ': ' + err.message));
+    return;
+  }
+
+  console.log('');
+  await runChild('git', ['clone', repoUrl, target], 'Clonar obsidian-skills');
+
+  if (await fileExists(target)) {
+    console.log(dim('\n  Skills disponibles tras la instalación:'));
+    console.log(dim('    · obsidian-markdown  — wikilinks, callouts, embeds, properties'));
+    console.log(dim('    · obsidian-bases     — archivos .base (filtros, fórmulas, vistas)'));
+    console.log(dim('    · json-canvas        — .canvas (diagramas con nodos/edges)'));
+    console.log(dim('    · obsidian-cli       — queries al vault desde CLI'));
+    console.log(dim('    · defuddle           — extraer markdown limpio de URLs'));
+    console.log(dim('\n  OpenCode auto-descubrirá los SKILL.md al reiniciar.'));
+    console.log(dim('\n  Tip: agregalo a .gitignore si NO querés commitear las skills:'));
+    console.log(dim('    echo ".opencode/skills/obsidian-skills/" >> .gitignore'));
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Utilidades
 // ═══════════════════════════════════════════════════════════════════
@@ -1555,8 +1613,8 @@ async function main() {
   const steps = await tuiMultiSelect(
     '\n¿Querés correr algún siguiente paso ahora?',
     [
-      { value: 'autoskills',       label: 'npx autoskills  ' + dim('— generar skills/ del proyecto') },
-      { value: 'obsidian-skills',  label: 'npx skills add (obsidian-skills)  ' + dim('— skill para Obsidian') },
+      { value: 'autoskills',       label: 'npx autoskills  ' + dim('— skills del proyecto en ./skills/') },
+      { value: 'obsidian-skills',  label: 'obsidian-skills  ' + dim('— git clone a .opencode/skills/ del proyecto') },
       { value: 'opencode',         label: 'Abrir OpenCode  ' + dim('— lanzar el TUI') },
     ],
     [],
@@ -1577,7 +1635,7 @@ async function main() {
     if (step === 'autoskills') {
       await runChild('npx', ['autoskills'], 'Generar skills/ del proyecto');
     } else if (step === 'obsidian-skills') {
-      await runChild('npx', ['skills', 'add', 'https://github.com/kepano/obsidian-skills'], 'Agregar obsidian-skills');
+      await installObsidianSkills();
     } else if (step === 'opencode') {
       await runChild('opencode', [], 'Abrir OpenCode');
     }
