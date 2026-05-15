@@ -1680,19 +1680,29 @@ async function main() {
 }
 
 // Cleanup robusto: stdin puede quedar en raw mode o "flowing" después de
-// los child processes con stdio: 'inherit', lo cual mantiene a Node vivo.
-// Forzamos cierre limpio.
+// los child processes con stdio: 'inherit', lo cual mantiene a Node vivo
+// (especialmente en Windows con shell: true).
+// Forzamos cierre limpio + exit duro como red de seguridad.
 function finalizeAndExit(code = 0) {
   try {
     if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
       stdin.setRawMode(false);
     }
   } catch {}
+  try { stdin.removeAllListeners('keypress'); } catch {}
+  try { stdin.removeAllListeners('data'); } catch {}
   try { rl.close(); } catch {}
   try { stdin.pause(); } catch {}
   try { stdin.unref(); } catch {}
-  // Damos un tick para que stdout flushee el output pendiente.
-  setImmediate(() => exit(code));
+  // Flush stdout/stderr y salir. En Windows con stdio: 'inherit' previo,
+  // los handles a veces quedan pegados — process.exit() es la única salida segura.
+  if (stdout.write('')) {
+    exit(code);
+  } else {
+    stdout.once('drain', () => exit(code));
+    // Fallback duro: 200ms y mata el proceso pase lo que pase.
+    setTimeout(() => exit(code), 200).unref();
+  }
 }
 
 main().catch((err) => {
