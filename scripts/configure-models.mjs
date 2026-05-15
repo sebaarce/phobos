@@ -183,16 +183,15 @@ function tuiMultiSelect(prompt, options, defaultChecked = []) {
     const fmt = (i) => {
       const isCursor = i === cursor;
       const isChecked = checked.has(options[i].value);
-      const box = isChecked
-        ? '[' + green('*') + ']'
-        : dim('[ ]');
+      // Checkbox Unicode con check verde cuando marcado
+      const box = isChecked ? green('☑') : dim('☐');
       let label = options[i].label;
       if (isChecked) {
         label = green(label);
       } else if (isCursor) {
         label = cyan(label);
       }
-      const arrow = isCursor ? cyan('▸') : ' ';
+      const arrow = isCursor ? cyan('›') : ' ';
       return '  ' + arrow + ' ' + box + ' ' + label;
     };
 
