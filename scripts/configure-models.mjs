@@ -1604,7 +1604,7 @@ async function main() {
   const allModels = await getFinalModelList(detected);
   if (!allModels || allModels.length === 0) {
     console.log('\nCancelado.');
-    rl.close();
+    finalizeAndExit(0);
     return;
   }
 
@@ -1612,7 +1612,7 @@ async function main() {
   const target = await chooseMode(allModels, current);
   if (!target) {
     console.log('\nCancelado.');
-    rl.close();
+    finalizeAndExit(0);
     return;
   }
 
@@ -1625,7 +1625,7 @@ async function main() {
       await applyChanges(agentDir, current, target);
     } else {
       console.log('\nCancelado. Ningún archivo modificado.');
-      rl.close();
+      finalizeAndExit(0);
       return;
     }
   } else {
@@ -1651,14 +1651,15 @@ async function main() {
 
   if (steps.length === 0) {
     showHappyGoodbye();
-    rl.close();
+    finalizeAndExit();
     return;
   }
 
   const launchesOpencode = steps.includes('opencode');
 
-  // Cerrar readline antes de spawnear hijos para evitar conflicto de stdin
-  rl.close();
+  // Pausamos readline durante los children (sin cerrarla — installObsidianSkills
+  // todavía usa tuiSelect/tuiMultiSelect internamente entre runChild calls).
+  rl.pause();
 
   for (const step of steps) {
     if (step === 'autoskills') {
@@ -1674,6 +1675,24 @@ async function main() {
   if (!launchesOpencode) {
     showHappyGoodbye();
   }
+
+  finalizeAndExit();
+}
+
+// Cleanup robusto: stdin puede quedar en raw mode o "flowing" después de
+// los child processes con stdio: 'inherit', lo cual mantiene a Node vivo.
+// Forzamos cierre limpio.
+function finalizeAndExit(code = 0) {
+  try {
+    if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
+      stdin.setRawMode(false);
+    }
+  } catch {}
+  try { rl.close(); } catch {}
+  try { stdin.pause(); } catch {}
+  try { stdin.unref(); } catch {}
+  // Damos un tick para que stdout flushee el output pendiente.
+  setImmediate(() => exit(code));
 }
 
 main().catch((err) => {
