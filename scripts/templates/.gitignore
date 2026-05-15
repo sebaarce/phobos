@@ -1,0 +1,37 @@
+# Vault — inputs crudos del usuario (PRDs, mockups, briefs) pueden ser privados/sensibles
+vault/sources/*
+!vault/sources/.gitkeep
+
+# OpenCode skills generadas por npx autoskills — opcional commitear según política del equipo
+# Descomentar si NO se quieren versionar:
+# skills/
+
+# Build & deps
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Logs y caché
+*.log
+.DS_Store
+Thumbs.db
+.cache/
+.parcel-cache/
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+*.swp
+*.swo

@@ -1,0 +1,16 @@
+{
+  "name": "phobos-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Setup local de agentes Phobos para OpenCode. Scripts utilitarios.",
+  "type": "module",
+  "bin": {
+    "phobos": "./scripts/configure-models.mjs"
+  },
+  "scripts": {
+    "models": "node scripts/configure-models.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
