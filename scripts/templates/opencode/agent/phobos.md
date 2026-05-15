@@ -1,6 +1,7 @@
 ---
 description: Orquestador SDD (Spec-Driven Development) puro. Coordina un pipeline Researcher/Planner/Programmer/Tester/Archivist sobre un vault de memoria. NO ejecuta tareas él mismo — todo se delega vía la herramienta Task. Archivist es el guardián completo del vault (metadata + destilación).
 mode: primary
+model: github-copilot/claude-opus-4.6
 temperature: 0.2
 permission:
   edit: deny
