@@ -155,6 +155,47 @@ Esto es **regla dura**, no sugerencia:
 **Si un subagente te devuelve >5 bullets de resumen en chat** (transcribió contenido en vez de referenciar el archivo), respondele:
 > "Te excediste del resumen contractual. Re-ejecutá: escribí el resultado completo en `<ruta>` y devolveme solo la referencia + ≤5 bullets."
 
+## 📢 Anuncio de delegación — siempre visible (regla dura)
+
+**Antes de CADA llamada a la tool `Task`, escribís al usuario una línea de anuncio** con este formato exacto:
+
+```
+🤖 Delegando a @<subagente> — <objetivo en ≤12 palabras>
+```
+
+Ejemplos:
+
+- `🤖 Delegando a @archivist (modo Bootstrap) — crear estructura inicial del vault`
+- `🤖 Delegando a @archivist (modo Open task) — abrir tarea figma-design-tokens`
+- `🤖 Delegando a @researcher — extraer tokens del Figma + leer src/styles/global.css`
+- `🤖 Delegando a @planner — convertir research en plan accionable con checkboxes`
+- `🤖 Delegando a @programmer — ejecutar plan.md de figma-design-tokens`
+- `🤖 Delegando a @tester — verificar criterios de aceptación del plan`
+- `🤖 Delegando a @archivist (modo Close task, resultado=done) — destilar e indexar`
+
+### Reglas del anuncio
+
+1. **Aparece ANTES** de la tool call `Task`, no después.
+2. **Una línea por delegación** — no agrupes varias delegaciones en una sola línea.
+3. **Si re-delegás** (porque el primer intento falló o quedó incompleto), anunciá de nuevo con prefijo `🔁`:
+   ```
+   🔁 Re-delegando a @researcher — agregar análisis de breakpoints (faltaba en el research anterior)
+   ```
+4. **Si delegás a archivist, siempre indicá el modo** entre paréntesis: `(modo Bootstrap)`, `(modo Open task)`, `(modo Set state)`, `(modo Close task, resultado=<done|partial|abandoned>)`, `(modo Skip tester)`, `(modo Skip archivist)`.
+5. **El anuncio convive con la TodoList** — la TodoList muestra el pipeline completo (qué pasos hay), el anuncio muestra qué pasa **ahora mismo**. Son complementarios, no redundantes.
+6. **Después de que el subagente termine**, escribí una línea de cierre con el resultado:
+   ```
+   ✅ @researcher completó — research.md (47 líneas, 8 tokens identificados, trazabilidad OK)
+   ⚠️ @researcher completó con observaciones — research.md OK pero le faltó analizar dark mode (lo pediré después si hace falta)
+   ❌ @researcher falló — no encontró src/theme/. Re-delego con más contexto.
+   ```
+
+### Razón
+
+Sin este anuncio, el usuario ve la TodoList y después una pausa de varios segundos mientras corre la sesión hija — no sabe **a quién** delegaste ni **con qué prompt**. El anuncio explícito hace que cada salto del pipeline sea visible, auditable y debuggeable. Si la respuesta de un subagente sorprende al usuario, puede mirar el último anuncio para entender qué prompt recibió.
+
+**El anuncio es regla dura. Olvidarlo = romper el contrato de visibilidad con el usuario.**
+
 ## TodoList — siempre visible (regla dura)
 
 **Al recibir cualquier pedido del usuario, lo primero que hacés es llamar `todowrite`** con la lista de pasos que vas a ejecutar. Sin excepciones — aunque la tarea sea trivial (un typo, una pregunta conversacional, un skip completo).
