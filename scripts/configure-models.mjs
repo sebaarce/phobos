@@ -451,6 +451,16 @@ const bold = (s) => color('1', s);
 // Header ASCII
 // ═══════════════════════════════════════════════════════════════════
 
+function clearScreen() {
+  // ESC[2J clears, ESC[H moves cursor to (0,0). Funciona en Windows Terminal, iTerm2, gnome-terminal.
+  // Fallback console.clear() para entornos exóticos.
+  if (stdout.isTTY) {
+    stdout.write('\x1b[2J\x1b[3J\x1b[H');
+  } else {
+    console.clear();
+  }
+}
+
 function printHeader() {
   const lines = [
     '██████╗ ██╗  ██╗ ██████╗ ██████╗  ██████╗ ███████╗',
@@ -464,6 +474,54 @@ function printHeader() {
   for (const l of lines) console.log('  ' + cyan(l));
   console.log('');
   console.log('  ' + dim('Orquestador SDD para OpenCode'));
+  console.log('');
+}
+
+function printUpdateBanner() {
+  const lines = [
+    '██╗   ██╗██████╗ ██████╗  █████╗ ████████╗███████╗',
+    '██║   ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔════╝',
+    '██║   ██║██████╔╝██║  ██║███████║   ██║   █████╗  ',
+    '██║   ██║██╔═══╝ ██║  ██║██╔══██║   ██║   ██╔══╝  ',
+    '╚██████╔╝██║     ██████╔╝██║  ██║   ██║   ███████╗',
+    ' ╚═════╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝',
+  ];
+  console.log('');
+  for (const l of lines) console.log('  ' + cyan(l));
+  console.log('');
+  console.log('  ' + dim('Update — revisa templates ↻ diferentes / ⚠ faltantes'));
+  console.log('');
+}
+
+function printModelsBanner() {
+  const lines = [
+    '███╗   ███╗ ██████╗ ██████╗ ███████╗██╗     ███████╗',
+    '████╗ ████║██╔═══██╗██╔══██╗██╔════╝██║     ██╔════╝',
+    '██╔████╔██║██║   ██║██║  ██║█████╗  ██║     ███████╗',
+    '██║╚██╔╝██║██║   ██║██║  ██║██╔══╝  ██║     ╚════██║',
+    '██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗███████╗███████║',
+    '╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚══════╝',
+  ];
+  console.log('');
+  for (const l of lines) console.log('  ' + cyan(l));
+  console.log('');
+  console.log('  ' + dim('Models — asigná un modelo a cada agente'));
+  console.log('');
+}
+
+function printToolsBanner() {
+  const lines = [
+    '████████╗ ██████╗  ██████╗ ██╗     ███████╗',
+    '╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝',
+    '   ██║   ██║   ██║██║   ██║██║     ███████╗',
+    '   ██║   ██║   ██║██║   ██║██║     ╚════██║',
+    '   ██║   ╚██████╔╝╚██████╔╝███████╗███████║',
+    '   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝',
+  ];
+  console.log('');
+  for (const l of lines) console.log('  ' + cyan(l));
+  console.log('');
+  console.log('  ' + dim('Tools — autoskills, obsidian, impeccable, opencode'));
   console.log('');
 }
 
@@ -1642,72 +1700,47 @@ function showSadGoodbye() {
   console.log('');
 }
 
-async function main() {
-  printHeader();
+// ═══════════════════════════════════════════════════════════════════
+// Acciones — cada una es una "pantalla" del wizard
+// ═══════════════════════════════════════════════════════════════════
 
-  // Verificar que tenemos templates accesibles
-  if (!await fileExists(TEMPLATES_DIR)) {
-    console.error(yellow(`✗ No encontré templates en ${TEMPLATES_DIR}`));
-    console.error('  El paquete está mal instalado. Reinstalá con: cd <repo> && npm link');
-    rl.close();
-    exit(1);
-  }
+async function actionUpdateAgents() {
+  clearScreen();
+  printUpdateBanner();
+  await ensureUpdated();
+  await pressEnterToContinue();
+}
 
-  // Detección: ¿es primera instalación o ya existe phobos en este proyecto?
-  const agentDir = resolve(cwd(), AGENTS_DIR);
-  const phobosPath = join(agentDir, 'phobos.md');
-  const isExistingInstall = await fileExists(phobosPath);
-
-  if (isExistingInstall) {
-    // Proyecto ya tiene Phobos — comparar con templates y ofrecer actualización
-    await ensureUpdated();
-  } else {
-    // Primera instalación — bootstrap completo (o salida limpia si el usuario rechaza)
-    const bootstrapped = await ensureBootstrap();
-    if (!bootstrapped) {
-      showSadGoodbye();
-      rl.close();
-      exit(0);
-    }
-  }
-
-  try {
-    await readdir(agentDir);
-  } catch {
-    console.error(yellow(`\n✗ No encontré ${AGENTS_DIR} en ${cwd()}`));
-    console.error('  Algo salió mal con el bootstrap/update. Verificá los permisos de escritura.');
-    rl.close();
-    exit(1);
-  }
+async function actionSetModels(agentDir) {
+  clearScreen();
+  printModelsBanner();
 
   const current = await readCurrentModels(agentDir);
 
-  // Paso 1: detectar (silenciosa si el CLI está; si no, sale con mensaje)
+  // Paso 1: detectar
   const detected = await detect();
 
-  // Si OpenCode no tiene providers conectados, salir con instrucciones
   if (detected.providers.size === 0) {
     console.log('');
     console.log('  ' + yellow('✗ No detecté proveedores conectados en OpenCode.'));
     console.log('');
-    console.log('  ' + dim('Para usar phobos necesitás al menos un proveedor conectado.'));
+    console.log('  ' + dim('Para configurar modelos necesitás al menos un proveedor conectado.'));
     console.log('');
     console.log('  ' + bold('Para conectar uno:'));
     console.log('    ' + dim('1.') + ' Iniciá OpenCode con  ' + cyan('opencode'));
     console.log('    ' + dim('2.') + ' Agregá un proveedor con  ' + cyan('/connect'));
-    console.log('    ' + dim('3.') + ' Volvé a correr  ' + cyan('npx github:sebaarce/phobos'));
     console.log('');
-    rl.close();
-    exit(1);
+    await pressEnterToContinue();
+    return;
   }
 
   summarizeDetection(detected);
 
-  // Paso 2: lista final (detectada o manual)
+  // Paso 2: lista final
   const allModels = await getFinalModelList(detected);
   if (!allModels || allModels.length === 0) {
     console.log('\nCancelado.');
-    finalizeAndExit(0);
+    await pressEnterToContinue();
     return;
   }
 
@@ -1715,7 +1748,7 @@ async function main() {
   const target = await chooseMode(allModels, current);
   if (!target) {
     console.log('\nCancelado.');
-    finalizeAndExit(0);
+    await pressEnterToContinue();
     return;
   }
 
@@ -1728,61 +1761,192 @@ async function main() {
       await applyChanges(agentDir, current, target);
     } else {
       console.log('\nCancelado. Ningún archivo modificado.');
-      finalizeAndExit(0);
-      return;
     }
   } else {
     console.log('\n' + dim('  ✓ Los modelos ya están configurados — no hay cambios que aplicar.'));
   }
 
-  // Siguiente pasos opcionales — siempre se ofrecen (haya o no habido cambios en modelos)
+  await pressEnterToContinue();
+}
+
+async function actionInstallTools() {
+  while (true) {
+    clearScreen();
+    printToolsBanner();
+    panel('Instalar herramientas', [
+      'Cada acción ejecuta un comando externo y vuelve a este menú al terminar.',
+      dim('Elegí una opción con ↑/↓ y Enter.'),
+    ]);
+
+    const { index } = await tuiSelect(
+      '\n¿Qué querés hacer?',
+      [
+        'npx autoskills           ' + dim('— skills del proyecto en ./skills/'),
+        'Instalar obsidian-skills ' + dim('— vault/notes en formato Obsidian'),
+        'Instalar impeccable      ' + dim('— skill de diseño/UI (vocab + anti-patterns)'),
+        'Abrir OpenCode           ' + dim('— lanzar el TUI'),
+        dim('← Volver al menú principal'),
+      ],
+      0,
+    );
+
+    if (index === 4) return; // volver
+
+    rl.pause();
+    if (index === 0) {
+      await runChild('npx', ['autoskills'], 'Generar skills/ del proyecto');
+    } else if (index === 1) {
+      await installObsidianSkills();
+    } else if (index === 2) {
+      await installImpeccable();
+    } else if (index === 3) {
+      await runChild('opencode', [], 'Abrir OpenCode');
+      // Si se abrió OpenCode, el usuario probablemente quiera salir del wizard
+      showHappyGoodbye();
+      finalizeAndExit(0);
+      return;
+    }
+
+    await pressEnterToContinue();
+  }
+}
+
+async function pressEnterToContinue() {
   console.log('');
-  panel('Sugerencias — librerías de terceros', [
-    'Herramientas externas opcionales que se ejecutan vía ' + cyan('npx') + '.',
-    dim('Marcá con Space las que quieras correr ahora, o seguí sin marcar nada.'),
-  ]);
+  console.log(dim('  Presioná Enter para volver al menú...'));
+  await new Promise((resolve) => {
+    const onKey = (str, key) => {
+      if (key && (key.name === 'return' || key.name === 'space' || (key.ctrl && key.name === 'c'))) {
+        stdin.removeListener('keypress', onKey);
+        try { stdin.setRawMode(false); } catch {}
+        resolve();
+      }
+    };
+    try { stdin.setRawMode(true); } catch {}
+    stdin.resume();
+    stdin.on('keypress', onKey);
+  });
+}
 
-  const steps = await tuiMultiSelect(
-    '\n¿Querés correr algún siguiente paso ahora?',
-    [
-      { value: 'autoskills',       label: 'npx autoskills  ' + dim('— skills del proyecto en ./skills/') },
-      { value: 'obsidian-skills',  label: 'obsidian-skills  ' + dim('— vault/notes en Obsidian-flavored markdown') },
-      { value: 'impeccable',       label: 'impeccable  ' + dim('— skill de diseño/UI (vocab + anti-patterns + auditorías)') },
-      { value: 'opencode',         label: 'Abrir OpenCode  ' + dim('— lanzar el TUI') },
-    ],
-    [],
-  );
+// ═══════════════════════════════════════════════════════════════════
+// Menu principal — stack-based con clear screen entre niveles
+// ═══════════════════════════════════════════════════════════════════
 
-  if (steps.length === 0) {
-    showHappyGoodbye();
-    finalizeAndExit();
+function renderMainMenuHeader(agentDir, installState) {
+  clearScreen();
+  printHeader();
+
+  const projectName = basename(cwd()) || cwd();
+  const agentsStatus = installState.agentsInstalled
+    ? green(`✓ instalados (${installState.agentCount})`)
+    : yellow('⚠ faltantes');
+  const vaultStatus = installState.vaultPresent
+    ? green('✓ presente')
+    : dim('— no creado');
+  const updatesStatus = installState.pendingUpdates > 0
+    ? yellow(`↻ ${installState.pendingUpdates} pendiente${installState.pendingUpdates > 1 ? 's' : ''}`)
+    : green('✓ al día');
+
+  console.log('  ' + dim('Proyecto:') + ' ' + cyan(projectName));
+  console.log('  ' + dim('Agentes: ') + agentsStatus
+    + dim('  ·  vault: ') + vaultStatus
+    + dim('  ·  templates: ') + updatesStatus);
+  console.log('');
+}
+
+async function getMainMenuState(agentDir) {
+  let agentsInstalled = false;
+  let agentCount = 0;
+  try {
+    const files = await readdir(agentDir);
+    const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'README.md');
+    agentCount = mdFiles.length;
+    agentsInstalled = agentCount >= 1;
+  } catch {}
+
+  const vaultPresent = await fileExists('vault');
+
+  let pendingUpdates = 0;
+  try {
+    const updates = await scanForUpdates();
+    pendingUpdates = updates.outdated.length + updates.missing.length;
+  } catch {}
+
+  return { agentsInstalled, agentCount, vaultPresent, pendingUpdates };
+}
+
+async function runMainMenu(agentDir) {
+  while (true) {
+    const state = await getMainMenuState(agentDir);
+    renderMainMenuHeader(agentDir, state);
+
+    const updateLabel = state.pendingUpdates > 0
+      ? 'Actualizar agentes      ' + dim(`(${state.pendingUpdates} pendiente${state.pendingUpdates > 1 ? 's' : ''})`)
+      : 'Actualizar agentes      ' + dim('(al día)');
+
+    const { index } = await tuiSelect(
+      '\n¿Qué querés hacer?',
+      [
+        updateLabel,
+        'Setear modelos de agentes',
+        'Instalar herramientas',
+        dim('Salir'),
+      ],
+      0,
+    );
+
+    if (index === 0) {
+      await actionUpdateAgents();
+    } else if (index === 1) {
+      await actionSetModels(agentDir);
+    } else if (index === 2) {
+      await actionInstallTools();
+    } else if (index === 3) {
+      clearScreen();
+      showHappyGoodbye();
+      finalizeAndExit(0);
+      return;
+    }
+  }
+}
+
+async function main() {
+  clearScreen();
+  printHeader();
+
+  // Verificar que tenemos templates accesibles
+  if (!await fileExists(TEMPLATES_DIR)) {
+    console.error(yellow(`✗ No encontré templates en ${TEMPLATES_DIR}`));
+    console.error('  El paquete está mal instalado. Reinstalá con: cd <repo> && npm link');
+    finalizeAndExit(1);
     return;
   }
 
-  const launchesOpencode = steps.includes('opencode');
+  const agentDir = resolve(cwd(), AGENTS_DIR);
+  const phobosPath = join(agentDir, 'phobos.md');
+  const isExistingInstall = await fileExists(phobosPath);
 
-  // Pausamos readline durante los children (sin cerrarla — installObsidianSkills
-  // todavía usa tuiSelect/tuiMultiSelect internamente entre runChild calls).
-  rl.pause();
-
-  for (const step of steps) {
-    if (step === 'autoskills') {
-      await runChild('npx', ['autoskills'], 'Generar skills/ del proyecto');
-    } else if (step === 'obsidian-skills') {
-      await installObsidianSkills();
-    } else if (step === 'impeccable') {
-      await installImpeccable();
-    } else if (step === 'opencode') {
-      await runChild('opencode', [], 'Abrir OpenCode');
+  if (!isExistingInstall) {
+    // Primera instalación — bootstrap obligatorio antes del menú
+    const bootstrapped = await ensureBootstrap();
+    if (!bootstrapped) {
+      showSadGoodbye();
+      finalizeAndExit(0);
+      return;
     }
   }
 
-  // Si NO se lanzó OpenCode, mostramos despedida (si se lanzó, OpenCode toma la pantalla)
-  if (!launchesOpencode) {
-    showHappyGoodbye();
+  try {
+    await readdir(agentDir);
+  } catch {
+    console.error(yellow(`\n✗ No encontré ${AGENTS_DIR} en ${cwd()}`));
+    console.error('  Algo salió mal con el bootstrap. Verificá los permisos de escritura.');
+    finalizeAndExit(1);
+    return;
   }
 
-  finalizeAndExit();
+  // Entrar al menú principal — loop hasta que el usuario elija Salir
+  await runMainMenu(agentDir);
 }
 
 // Cleanup robusto: stdin puede quedar en raw mode o "flowing" después de
