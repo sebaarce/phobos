@@ -88,8 +88,15 @@ const rl = readline.createInterface({ input: stdin, output: stdout });
 // TUI helpers — selección con cursor + Enter
 // ═══════════════════════════════════════════════════════════════════
 
+// Sentinel para cancelar el wizard actual (Esc) y volver al menú principal.
+// Distinto a Ctrl+C que sale del proceso completo.
+const WIZARD_CANCELLED = Symbol('WIZARD_CANCELLED');
+
+const HINT_SELECT = '  ↑/↓ navegar  ·  Enter confirmar  ·  Esc volver al menú  ·  Ctrl+C salir';
+const HINT_MULTI  = '  ↑/↓ navegar  ·  Space marcar  ·  Enter confirmar  ·  Esc volver al menú  ·  Ctrl+C salir';
+
 function tuiSelect(prompt, options, defaultIdx = 0) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let selected = defaultIdx;
     const N = options.length;
     const isTTY = stdin.isTTY && stdout.isTTY;
@@ -110,7 +117,7 @@ function tuiSelect(prompt, options, defaultIdx = 0) {
 
     console.log(prompt);
     for (let i = 0; i < N; i++) console.log(fmt(i, selected));
-    console.log(dim('  ↑/↓ para navegar, Enter para confirmar, Ctrl+C para cancelar'));
+    console.log(dim(HINT_SELECT));
 
     const rerender = () => {
       // Subir N+1 líneas (N opciones + 1 línea de hint)
@@ -118,7 +125,7 @@ function tuiSelect(prompt, options, defaultIdx = 0) {
       for (let i = 0; i < N; i++) {
         stdout.write('\r\x1b[K' + fmt(i, selected) + '\n');
       }
-      stdout.write('\r\x1b[K' + dim('  ↑/↓ para navegar, Enter para confirmar, Ctrl+C para cancelar') + '\n');
+      stdout.write('\r\x1b[K' + dim(HINT_SELECT) + '\n');
     };
 
     rl.pause();
@@ -138,9 +145,13 @@ function tuiSelect(prompt, options, defaultIdx = 0) {
         // Limpiar la línea de hint para no dejar basura
         stdout.write('\x1b[1A\r\x1b[K\n');
         resolve({ index: selected, value: options[selected] });
+      } else if (key.name === 'escape') {
+        cleanup();
+        stdout.write('\x1b[1A\r\x1b[K\n');
+        reject(WIZARD_CANCELLED);
       } else if (key.ctrl && key.name === 'c') {
         cleanup();
-        console.log('\n(cancelado)');
+        console.log('\n(salida)');
         exit(0);
       } else if (/^[1-9]$/.test(str || '')) {
         const n = parseInt(str, 10) - 1;
@@ -167,7 +178,7 @@ async function tuiYesNo(prompt, defaultYes = false) {
 }
 
 function tuiMultiSelect(prompt, options, defaultChecked = []) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let cursor = 0;
     const checked = new Set(defaultChecked);
     const N = options.length;
@@ -197,14 +208,14 @@ function tuiMultiSelect(prompt, options, defaultChecked = []) {
 
     console.log(prompt);
     for (let i = 0; i < N; i++) console.log(fmt(i));
-    console.log(dim('  ↑/↓ navegar  ·  Space marcar  ·  Enter confirmar  ·  Ctrl+C cancelar'));
+    console.log(dim(HINT_MULTI));
 
     const rerender = () => {
       stdout.write(`\x1b[${N + 1}A`);
       for (let i = 0; i < N; i++) {
         stdout.write('\r\x1b[K' + fmt(i) + '\n');
       }
-      stdout.write('\r\x1b[K' + dim('  ↑/↓ navegar  ·  Space marcar  ·  Enter confirmar  ·  Ctrl+C cancelar') + '\n');
+      stdout.write('\r\x1b[K' + dim(HINT_MULTI) + '\n');
     };
 
     rl.pause();
@@ -228,9 +239,13 @@ function tuiMultiSelect(prompt, options, defaultChecked = []) {
         cleanup();
         stdout.write('\x1b[1A\r\x1b[K\n');
         resolve(Array.from(checked));
+      } else if (key.name === 'escape') {
+        cleanup();
+        stdout.write('\x1b[1A\r\x1b[K\n');
+        reject(WIZARD_CANCELLED);
       } else if (key.ctrl && key.name === 'c') {
         cleanup();
-        console.log('\n(cancelado)');
+        console.log('\n(salida)');
         exit(0);
       }
     };
@@ -1813,10 +1828,12 @@ async function actionInstallTools() {
 
 async function pressEnterToContinue() {
   console.log('');
-  console.log(dim('  Presioná Enter para volver al menú...'));
+  console.log(dim('  Presioná Enter o Esc para volver al menú...'));
   await new Promise((resolve) => {
     const onKey = (str, key) => {
-      if (key && (key.name === 'return' || key.name === 'space' || (key.ctrl && key.name === 'c'))) {
+      if (!key) return;
+      // Enter, Space, Esc, o Ctrl+C — todos liberan (la acción ya terminó).
+      if (key.name === 'return' || key.name === 'space' || key.name === 'escape' || (key.ctrl && key.name === 'c')) {
         stdin.removeListener('keypress', onKey);
         try { stdin.setRawMode(false); } catch {}
         resolve();
@@ -1875,6 +1892,21 @@ async function getMainMenuState(agentDir) {
   return { agentsInstalled, agentCount, vaultPresent, pendingUpdates };
 }
 
+// Envuelve una acción del wizard de forma que si el usuario apreta Esc
+// dentro del flujo, capturamos el sentinel WIZARD_CANCELLED y volvemos
+// al menú principal en lugar de propagar el reject.
+async function runAction(actionFn) {
+  try {
+    await actionFn();
+  } catch (err) {
+    if (err === WIZARD_CANCELLED) {
+      // Volvemos al menú principal silenciosamente.
+      return;
+    }
+    throw err;
+  }
+}
+
 async function runMainMenu(agentDir) {
   while (true) {
     const state = await getMainMenuState(agentDir);
@@ -1884,23 +1916,32 @@ async function runMainMenu(agentDir) {
       ? 'Actualizar agentes      ' + dim(`(${state.pendingUpdates} pendiente${state.pendingUpdates > 1 ? 's' : ''})`)
       : 'Actualizar agentes      ' + dim('(al día)');
 
-    const { index } = await tuiSelect(
-      '\n¿Qué querés hacer?',
-      [
-        updateLabel,
-        'Setear modelos de agentes',
-        'Instalar herramientas',
-        dim('Salir'),
-      ],
-      0,
-    );
+    // En el menú principal Esc no tiene sentido (no hay "menú padre"),
+    // pero si el usuario lo apreta, lo tratamos como "no acción" — solo re-rendereamos.
+    let choice;
+    try {
+      choice = await tuiSelect(
+        '\n¿Qué querés hacer?',
+        [
+          updateLabel,
+          'Setear modelos de agentes',
+          'Instalar herramientas',
+          dim('Salir'),
+        ],
+        0,
+      );
+    } catch (err) {
+      if (err === WIZARD_CANCELLED) continue; // re-renderizar menú
+      throw err;
+    }
 
+    const { index } = choice;
     if (index === 0) {
-      await actionUpdateAgents();
+      await runAction(() => actionUpdateAgents());
     } else if (index === 1) {
-      await actionSetModels(agentDir);
+      await runAction(() => actionSetModels(agentDir));
     } else if (index === 2) {
-      await actionInstallTools();
+      await runAction(() => actionInstallTools());
     } else if (index === 3) {
       clearScreen();
       showHappyGoodbye();
@@ -1976,11 +2017,17 @@ function finalizeAndExit(code = 0) {
 }
 
 main().catch((err) => {
-  if (err.code === 'ERR_USE_AFTER_CLOSE' || /readline was closed/i.test(err.message || '')) {
+  if (err === WIZARD_CANCELLED) {
+    // Esc llegó hasta el tope — no debería pasar (runAction lo captura), pero por las dudas
+    // salimos limpio sin error.
+    finalizeAndExit(0);
+    return;
+  }
+  if (err && (err.code === 'ERR_USE_AFTER_CLOSE' || /readline was closed/i.test(err.message || ''))) {
     console.log('\n(input cerrado — cancelado)');
     exit(0);
   }
-  console.error('\n✗ Error inesperado:', err.message);
+  console.error('\n✗ Error inesperado:', err && err.message ? err.message : err);
   rl.close();
   exit(1);
 });
