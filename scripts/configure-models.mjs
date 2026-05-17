@@ -2133,6 +2133,33 @@ function projectCollectionSlug() {
   return `phobos-vault-${slug}`;
 }
 
+// Chequea si los agentes researcher.md y archivist.md del proyecto tienen
+// las reglas de soporte de Memory (pre-flight search en researcher, trigger
+// reindex en archivist). Si ambos las tienen, Memory va a funcionar
+// automáticamente. Si no, el engine se instala pero los agentes viejos no la
+// usan — el usuario debe correr "Actualizar agentes" primero.
+async function detectAgentsHaveMemorySupport() {
+  const researcherPath = join(cwd(), '.opencode/agent/researcher.md');
+  const archivistPath = join(cwd(), '.opencode/agent/archivist.md');
+
+  let researcherOK = false;
+  let archivistOK = false;
+
+  try {
+    const r = await readFile(researcherPath, 'utf-8');
+    researcherOK = /Pre-flight:\s*semantic\s*search/i.test(r)
+      || /vault\/memory\/\.engine\/search\.mjs/.test(r);
+  } catch {}
+
+  try {
+    const a = await readFile(archivistPath, 'utf-8');
+    archivistOK = /Trigger\s*semantic\s*re-?index/i.test(a)
+      || /vault\/memory\/\.engine\/index-vault\.mjs/.test(a);
+  } catch {}
+
+  return { researcherOK, archivistOK };
+}
+
 // Estado de Qdrant global. Devuelve { containerRunning, healthy }.
 async function detectQdrantStatus() {
   const ps = tryExec(
@@ -2252,6 +2279,8 @@ async function actionInstallMemory() {
   const qdrant = await detectQdrantStatus();
   const pm = await detectPackageManager();
   const collectionName = projectCollectionSlug();
+  const agentSupport = await detectAgentsHaveMemorySupport();
+  const agentsReady = agentSupport.researcherOK && agentSupport.archivistOK;
 
   console.log('  ' + dim('Qdrant global: ') + (
     qdrant.containerRunning && qdrant.healthy ? green('✓ corriendo y healthy en ' + QDRANT_URL)
@@ -2261,17 +2290,56 @@ async function actionInstallMemory() {
   console.log('  ' + dim('Package manager: ') + cyan(pm));
   console.log('  ' + dim('Collection name: ') + cyan(collectionName));
   console.log('  ' + dim('Global compose: ') + cyan(QDRANT_COMPOSE_GLOBAL));
+  console.log('  ' + dim('Agentes preparados para Memory: ')
+    + (agentsReady
+        ? green('✓ researcher y archivist tienen reglas RAG')
+        : yellow('⚠ alguno está outdated — ver advertencia abajo')));
+
+  if (!agentsReady) {
+    console.log('');
+    console.log('  ' + yellow('Advertencia — agentes outdated:'));
+    if (!agentSupport.researcherOK) {
+      console.log('  ' + dim('  · researcher.md NO tiene la regla "Pre-flight: semantic search"'));
+    }
+    if (!agentSupport.archivistOK) {
+      console.log('  ' + dim('  · archivist.md NO tiene la regla "Trigger semantic re-index"'));
+    }
+    console.log('');
+    console.log('  ' + dim('  Memory se va a instalar igual y los scripts'));
+    console.log('  ' + dim('    node vault/memory/.engine/search.mjs "<query>"'));
+    console.log('  ' + dim('    node vault/memory/.engine/index-vault.mjs --incremental'));
+    console.log('  ' + dim('  van a funcionar correctamente desde la terminal.'));
+    console.log('');
+    console.log('  ' + dim('  PERO los agentes viejos no van a invocarlos automáticamente.'));
+    console.log('  ' + dim('  Para que Phobos use Memory en su flujo normal de tareas:'));
+    console.log('  ' + dim('    1. Cancelá este wizard (Esc o "No").'));
+    console.log('  ' + dim('    2. Volvé al menú principal → ') + cyan('"Actualizar agentes"'));
+    console.log('  ' + dim('    3. Aplicá las actualizaciones (preservan tus modelos).'));
+    console.log('  ' + dim('    4. Volvé a entrar a "Memory (RAG)".'));
+  }
 
   history.push({
     label: 'Estado inicial',
-    value: `Qdrant global ${qdrant.healthy ? 'corriendo' : 'no corriendo'} · pm=${pm} · collection=${collectionName}`,
+    value: `Qdrant ${qdrant.healthy ? 'corriendo' : 'no corriendo'} · pm=${pm} · agentes ${agentsReady ? 'OK' : 'outdated'}`,
   });
 
-  const proceed = await tuiYesNo('\n¿Continuar con la instalación de Memory en este proyecto?', true);
+  const proceedPrompt = agentsReady
+    ? '\n¿Continuar con la instalación de Memory en este proyecto?'
+    : '\n¿Continuar igualmente (los agentes seguirán sin invocar Memory hasta que los actualices)?';
+
+  const proceed = await tuiYesNo(proceedPrompt, agentsReady);
   if (!proceed) {
-    history.push({ label: 'Confirmación', value: 'Cancelado por el usuario' });
+    history.push({
+      label: 'Confirmación',
+      value: agentsReady ? 'Cancelado por el usuario' : 'Cancelado — primero actualizar agentes',
+    });
     renderWizardStep(printMemoryBanner, history, '');
-    console.log('  ' + dim('⊘ Instalación saltada.'));
+    if (!agentsReady) {
+      console.log('  ' + dim('  Volvé al menú principal y elegí "Actualizar agentes" primero.'));
+      console.log('  ' + dim('  Cuando los templates queden sincronizados, reintentá Memory.'));
+    } else {
+      console.log('  ' + dim('  ⊘ Instalación saltada.'));
+    }
     await pressEnterToContinue();
     return;
   }
