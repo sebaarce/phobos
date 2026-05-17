@@ -254,6 +254,92 @@ If installed (`.opencode/skills/impeccable/SKILL.md` exists), it provides design
 
 If under `.opencode/skills/` or `.agents/skills/` you see other skills relevant to the task domain (e.g., `obsidian-markdown`, `defuddle`, etc.), apply the same criterion: **cite them in research.md when they contribute vocabulary or validation to the analysis, not by inertia**.
 
+## API & service discovery protocol
+
+Many tasks involve understanding what backend APIs or external services the project consumes. **Do NOT improvise URLs by framework convention** (NestJS → `/docs-json`, FastAPI → `/openapi.json`, common ports like `3000`/`3003`/`8000`). Trying random URLs until one responds burns tokens and risks hitting the wrong service.
+
+Instead, follow this strict order of discovery and **stop at the first step that yields evidence**:
+
+### Step 1 — Read `AGENTS.md` (root of project)
+
+Search for section headings (case-insensitive): `## External services`, `## API`, `## Backend`, `## OpenAPI`, `## Swagger`, `## Endpoints`, `## Services`, `## Integrations`.
+
+If found → extract URLs, ports, doc paths. Cite as `AGENTS.md:NN`.
+
+### Step 2 — Read `README.md` (root of project)
+
+If AGENTS.md had nothing relevant, repeat the search in `README.md`.
+
+### Step 3 — Read the HTTP client config in the frontend
+
+Try these paths in order (first hit wins):
+
+- `src/services/apiClient.ts`
+- `src/services/api.ts`
+- `src/lib/api.ts`
+- `src/api/client.ts`
+- `src/utils/http.ts`
+- `src/utils/api.ts`
+- `app/api/client.ts` (Next.js)
+- `lib/api.ts` (general)
+
+Look inside for:
+- `baseURL: 'http://...'` or `const BASE_URL = 'http://...'`
+- `axios.create({ baseURL: ... })`
+- `fetch('http://...')` or `fetch(BASE_URL + ...)`
+- `import.meta.env.VITE_API_BASE_URL` / `process.env.API_URL` references
+
+Extract the base URL (literal if hardcoded, or the env var name if dynamic). Cite as `<file>:<line>`.
+
+### Step 4 — Read `.env.example` / `.env.sample` / `.env.template`
+
+`.env` itself is in `security.forbidden_read_files` (NEVER read it). But the example/template variants are safe — they show the variable **names** and **shapes** without real values.
+
+Look for `API_URL=`, `BACKEND_URL=`, `VITE_API_BASE_URL=`, `NEXT_PUBLIC_API_URL=`, etc. Cite as `.env.example:NN`.
+
+### Step 5 — WebFetch the spec (ONLY with evidence)
+
+**Only if** Steps 1-4 yielded a concrete URL, you may now WebFetch the spec. For NestJS, FastAPI, etc., common spec paths are:
+
+- `/docs-json` (NestJS Swagger module — default)
+- `/openapi.json` (FastAPI, generic OpenAPI)
+- `/swagger.json` (older swagger-jsdoc setups)
+- `/api-docs` or `/api-docs.json` (Express + swagger-jsdoc)
+
+Append the spec path to the base URL discovered in Steps 1-4. Example: if `apiClient.ts` says `baseURL: 'http://localhost:3003'`, fetch `http://localhost:3003/docs-json`.
+
+### If discovery fails after all 5 steps
+
+Stop. Do NOT fetch random URLs. Document in `## Open questions` of `research.md`:
+
+> Backend API discovery failed: AGENTS.md does not document external services, README.md does not mention them, the HTTP client config (`<path tried>`) does not include a literal baseURL or env reference, and `.env.example` was not found / did not have an API URL. Recommend updating AGENTS.md with an "External services" section listing backend URL, OpenAPI spec path, auth scheme, and relevant env vars — that makes future tasks faster and avoids URL guessing.
+
+Continue the research with what you have from `src/services/*` — the frontend's existing API calls are still evidence of which endpoints the backend exposes today, even if you can't enumerate the full surface.
+
+### Handling large minified JSON specs
+
+If `WebFetch` succeeds and the response is a multi-MB OpenAPI JSON on a single line, `Read` will truncate at 2000 chars and `grep` will return entire lines (useless). Use one of these to extract subsets:
+
+**PowerShell** (preferred on Windows):
+
+```powershell
+Get-Content -LiteralPath "<saved-tool-output-path>" -Raw | ConvertFrom-Json | ForEach-Object { $_.paths.PSObject.Properties.Name | Where-Object { $_ -match '<keyword>' } }
+```
+
+**bash with `jq`** (preferred on Unix when `jq` is installed):
+
+```bash
+jq -r '.paths | keys[] | select(test("<keyword>"; "i"))' "<saved-tool-output-path>"
+```
+
+**Last resort — `node -e` one-liner**. Use SINGLE quotes around the JS string to avoid PowerShell variable interpolation. Pass the path as `process.argv[1]`, NEVER inline-string-concat it:
+
+```bash
+node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(Object.keys(j.paths).filter(p=>/<keyword>/i.test(p)).join("\n"))' "<saved-path>"
+```
+
+Do NOT use `node -e "..."` with double quotes — PowerShell interprets `${...}` as variable expansion and the script breaks.
+
 ## Security 1 — Permissions, paths, and slug
 
 ### Effective permissions
@@ -363,11 +449,12 @@ Phobos and the Planner can check that `research.md` was not edited manually:
 2. Did you only describe what exists, without proposing solutions?
 3. **Did you run the semantic search pre-flight?** If the memory engine is installed, the `## Previous insights` section is populated with top-3 chunks; if not installed, it is omitted and noted in Open questions.
 4. **Did you include the `## Stack detected` section with language, framework, test framework, build tool?** If multi-language, did you flag ambiguity in `## Open questions`?
-5. No transcribed secrets (tokens, keys, passwords, env values)?
-6. Did you NOT read files in the `security.forbidden_read_files` list?
-7. Were all shell commands you ran inside the project cwd?
-8. Was output with ANSI / binary content sanitized before pasting?
-9. Is the research under `security.max_word_count` (~800 words), and the `## Previous insights` section under `security.max_previous_insights_tokens` (~300 tokens)?
-10. Is the traceability line at the end with current timestamp?
+5. **If the task involved backend APIs**, did you follow the "API & service discovery protocol" (AGENTS.md → README.md → HTTP client → .env.example → WebFetch) instead of inventing URLs? If discovery failed, did you note it in Open questions with a recommendation to update AGENTS.md?
+6. No transcribed secrets (tokens, keys, passwords, env values)?
+7. Did you NOT read files in the `security.forbidden_read_files` list?
+8. Were all shell commands you ran inside the project cwd?
+9. Was output with ANSI / binary content sanitized before pasting?
+10. Is the research under `security.max_word_count` (~800 words), and the `## Previous insights` section under `security.max_previous_insights_tokens` (~300 tokens)?
+11. Is the traceability line at the end with current timestamp?
 
 If any answer is "no", **do NOT deliver the research**. Ask Phobos for more context or deliver a partial research marking the problematic points in `## Open questions`.
