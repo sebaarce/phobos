@@ -2618,17 +2618,108 @@ async function installMemoryDepsWithRetry(pm, depList, initialFlags = []) {
   return { ok: false, exitCode: -1, missing: ['(retries exhausted)'] };
 }
 
-// Convierte el nombre del proyecto en un slug válido para Qdrant collection name.
-// Qdrant acepta: alfanumérico + `_` + `-`. Caso edge: si el basename quedara vacío,
-// usamos un fallback derivado del path completo.
+// Convierte el nombre del proyecto en un slug "default" para Qdrant collection.
+// Es solo el candidato inicial. La collection REAL del proyecto se persiste en
+// vault/memory/.engine/config.json (ver getProjectActiveCollection).
 function projectCollectionSlug() {
   const base = basename(cwd()).toLowerCase();
   let slug = base.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug) {
-    // Edge case: proyectos con nombres exóticos. Hash corto del path.
     slug = 'project-' + Buffer.from(cwd()).toString('hex').slice(0, 8);
   }
   return `phobos-vault-${slug}`;
+}
+
+// Devuelve la collection que el proyecto está USANDO realmente. Si Memory
+// está instalada, lee el config.json; si no, devuelve el default basado en basename.
+async function getProjectActiveCollection() {
+  try {
+    const raw = await readFile('vault/memory/.engine/config.json', 'utf-8');
+    const parsed = JSON.parse(raw);
+    const fromConfig = parsed?.qdrant?.collection;
+    if (fromConfig) return fromConfig;
+  } catch {}
+  return projectCollectionSlug();
+}
+
+// Resolver interactivo: decide qué collection usar para este proyecto.
+// Detecta colisiones con collections existentes en Qdrant (otro proyecto con
+// el mismo basename) y ofrece alternativas.
+// Devuelve { slug, isReuse } o null si el usuario cancela.
+async function resolveCollectionSlug() {
+  const cwdStr = cwd();
+  const candidate = projectCollectionSlug();
+  const existing = await listQdrantCollections();
+
+  // Caso simple: no hay colisión
+  if (!existing.includes(candidate)) {
+    return { slug: candidate, isReuse: false };
+  }
+
+  // Colisión detectada. Tratamos de discriminar si es re-instalación
+  // (mismo proyecto) o proyecto distinto, mirando una muestra existente.
+  const samples = await getCollectionSamples(candidate, 1);
+  const sampleFile = samples[0]?.payload?.filePath || '';
+  let isSameProject = false;
+  if (sampleFile) {
+    isSameProject = await fileExists(sampleFile);
+  }
+
+  // Sugerir un nombre alternativo usando el directorio padre como discriminador.
+  const parent = basename(dirname(cwdStr)).toLowerCase();
+  const base = basename(cwdStr).toLowerCase();
+  let altRaw = `${parent}-${base}`.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!altRaw) altRaw = 'project-' + Buffer.from(cwdStr).toString('hex').slice(0, 8);
+  let altCandidate = `phobos-vault-${altRaw}`;
+  // Si la alternativa también choca, agregar un suffix corto.
+  if (existing.includes(altCandidate)) {
+    altCandidate = `${altCandidate}-${Date.now().toString(36).slice(-4)}`;
+  }
+
+  console.log('');
+  console.log('  ' + yellow('⚠ Ya existe la collection ') + cyan(`"${candidate}"`) + yellow(' en Qdrant.'));
+  if (sampleFile) {
+    console.log('  ' + dim('  Sample existente apunta a: ') + cyan(sampleFile));
+    console.log('  ' + dim('  ¿Ese archivo existe en este proyecto? ')
+      + (isSameProject
+          ? green('SÍ — probable re-instalación del mismo proyecto')
+          : yellow('NO — parece ser OTRO proyecto con el mismo basename')));
+  } else {
+    console.log('  ' + dim('  (collection vacía o sin muestras — no puedo discriminar de qué proyecto vino)'));
+  }
+  console.log('');
+
+  const options = [
+    isSameProject
+      ? `Reusar "${candidate}"  ${green('(recomendado — parece el mismo proyecto)')}`
+      : `Reusar "${candidate}"  ${red('(NO recomendado — mezclaría vectores de OTRO proyecto)')}`,
+    `Crear nueva: "${altCandidate}"  ${(!isSameProject ? green('(recomendado para proyectos distintos)') : dim(''))}`,
+    'Ingresar nombre custom',
+    'Cancelar instalación',
+  ];
+  const defaultIdx = isSameProject ? 0 : 1;
+
+  const choice = await tuiSelect('\n¿Qué hacés con el nombre de la collection?', options, defaultIdx);
+
+  if (choice.index === 3) return null;
+  if (choice.index === 0) return { slug: candidate, isReuse: true };
+  if (choice.index === 1) return { slug: altCandidate, isReuse: false };
+  // Custom
+  rl.resume();
+  console.log('');
+  const custom = (await rl.question('  Nombre de la collection (sin prefijo "phobos-vault-"): ')).trim();
+  rl.pause();
+  let customSlug = custom.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!customSlug) {
+    console.log('  ' + yellow('Nombre inválido. Cancelando.'));
+    return null;
+  }
+  const finalSlug = `phobos-vault-${customSlug}`;
+  if (existing.includes(finalSlug)) {
+    console.log('  ' + yellow(`Ese nombre también existe ("${finalSlug}"). Reintentá con algo más único.`));
+    return null;
+  }
+  return { slug: finalSlug, isReuse: false };
 }
 
 // Chequea si los agentes researcher.md y archivist.md del proyecto tienen
@@ -2758,7 +2849,7 @@ async function actionMemory() {
     printMemoryBanner();
 
     const qdrant = await detectQdrantStatus();
-    const collectionName = projectCollectionSlug();
+    const collectionName = await getProjectActiveCollection();
     const collections = qdrant.healthy ? await listQdrantCollections() : [];
 
     panel('Memory (RAG) — submenú', [
@@ -2826,7 +2917,7 @@ async function actionInspectQdrant() {
   console.log('');
   console.log('  ' + bold('Collections en la instancia global'));
   const collections = await listQdrantCollectionsDetailed();
-  const mySlug = projectCollectionSlug();
+  const mySlug = await getProjectActiveCollection();
 
   if (collections.length === 0) {
     console.log('  ' + dim('  (ninguna — instalá Memory en algún proyecto y se va a crear)'));
@@ -3249,10 +3340,11 @@ async function actionResetQdrant() {
     ['vault/memory/.engine/index-vault.mjs', '--force'],
     'index-vault.mjs --force',
   );
+  const activeCollection = await getProjectActiveCollection();
   history.push({
     label: 'Re-indexación',
     value: indexCode === 0
-      ? `Vault del proyecto re-indexado en collection ${projectCollectionSlug()}`
+      ? `Vault del proyecto re-indexado en collection ${activeCollection}`
       : `Falló (exit ${indexCode}) — corré manualmente con node vault/memory/.engine/index-vault.mjs --force`,
   });
 
@@ -3260,7 +3352,7 @@ async function actionResetQdrant() {
   renderWizardStep(printMemoryBanner, history, '');
   console.log('  ' + green('Reset completado.'));
   console.log('');
-  console.log('  ' + dim('Tu collection en Qdrant: ') + cyan(projectCollectionSlug()));
+  console.log('  ' + dim('Tu collection en Qdrant: ') + cyan(activeCollection));
   if (backupDone) {
     console.log('  ' + dim('Backup del storage anterior: ') + cyan(backupPath));
     console.log('  ' + dim('  → si querés restaurarlo en el futuro: parar Qdrant, mv backup encima de qdrant-storage/, levantar.'));
@@ -3302,7 +3394,22 @@ async function actionInstallMemory() {
 
   const qdrant = await detectQdrantStatus();
   const pm = await detectPackageManager();
-  const collectionName = projectCollectionSlug();
+
+  // Resolver collection con detección de colisiones. Si hay otro proyecto con el
+  // mismo basename ("backend", "frontend", "api"), el resolver ofrece un nombre
+  // alternativo (parent-basename) o custom.
+  const resolved = qdrant.healthy
+    ? await resolveCollectionSlug()
+    : { slug: projectCollectionSlug(), isReuse: false };
+  if (!resolved) {
+    history.push({ label: 'Collection', value: 'Cancelado por colisión de nombre' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log('  ' + dim('⊘ Instalación cancelada.'));
+    await pressEnterToContinue();
+    return;
+  }
+  const collectionName = resolved.slug;
+
   const agentSupport = await detectAgentsHaveMemorySupport();
   const agentsReady = agentSupport.researcherOK && agentSupport.archivistOK;
   const problemStacks = await detectProblematicStack();
