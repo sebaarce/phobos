@@ -1782,9 +1782,114 @@ function renderWizardStep(bannerFn, history, stepHeader) {
 }
 
 async function actionUpdateAgents() {
-  clearScreen();
-  printUpdateBanner();
-  await ensureUpdated();
+  const history = [];
+
+  // ─── Step 1/4: Detectar archivos diferentes y faltantes ────────────
+  renderWizardStep(printUpdateBanner, history, '[1/4] Detectando estado de templates...');
+  const updates = await scanForUpdates();
+  const totalOutdated = updates.outdated.length;
+  const totalMissing = updates.missing.length;
+  const totalInSync = updates.inSync.length;
+  const nothingToDo = totalOutdated === 0 && totalMissing === 0;
+
+  showUpdateStatus(updates);
+
+  history.push({
+    label: 'Detección',
+    value: nothingToDo
+      ? `Todo al día (${totalInSync} archivo${totalInSync > 1 ? 's' : ''} sincronizados)`
+      : [
+          totalOutdated > 0 ? `${totalOutdated} ↻ diferente${totalOutdated > 1 ? 's' : ''}` : null,
+          totalMissing > 0 ? `${totalMissing} ⚠ faltante${totalMissing > 1 ? 's' : ''}` : null,
+          totalInSync > 0 ? `${totalInSync} ✓ al día` : null,
+        ].filter(Boolean).join(', '),
+  });
+
+  if (nothingToDo) {
+    renderWizardStep(printUpdateBanner, history, '');
+    console.log('  ' + green('✓ Agentes sincronizados con la última versión del template.'));
+    console.log('  ' + dim('No hay nada que actualizar.'));
+    await pressEnterToContinue();
+    return;
+  }
+
+  // ─── Step 2/4: Elegir estrategia ───────────────────────────────────
+  renderWizardStep(printUpdateBanner, history, '[2/4] Elegir estrategia de actualización');
+
+  const detail = [
+    totalOutdated > 0 ? `${totalOutdated} ↻ diferente${totalOutdated > 1 ? 's' : ''}` : null,
+    totalMissing > 0 ? `${totalMissing} ⚠ faltante${totalMissing > 1 ? 's' : ''}` : null,
+  ].filter(Boolean).join(' + ');
+
+  const { index } = await tuiSelect(
+    '\n¿Qué hacés con las actualizaciones?',
+    [
+      'Revisar uno por uno (Recomendado)',
+      `Aplicar todas las actualizaciones pendientes  ${dim('(' + detail + ', preserva mis modelos)')}`,
+      'Saltar — no actualizar nada',
+    ],
+    0,
+  );
+
+  if (index === 2) {
+    history.push({ label: 'Estrategia', value: 'Saltar — sin cambios' });
+    renderWizardStep(printUpdateBanner, history, '');
+    console.log('  ' + dim('⊘ Actualización saltada.'));
+    await pressEnterToContinue();
+    return;
+  }
+
+  const strategyLabel = index === 0 ? 'Revisar uno por uno' : 'Aplicar todas (preserva modelos)';
+  history.push({ label: 'Estrategia', value: strategyLabel });
+
+  // ─── Step 3/4: Backup previo ───────────────────────────────────────
+  renderWizardStep(printUpdateBanner, history, '[3/4] Backup previo a la actualización');
+
+  const filesToBackup = updates.outdated.map(f => f.dst);
+  let backupApplied = false;
+
+  if (filesToBackup.length > 0) {
+    const names = filesToBackup.map(p => basename(p)).join(', ');
+    const wantsBackup = await tuiYesNo(
+      `\n¿Querés hacer un backup de ${filesToBackup.length} archivo${filesToBackup.length > 1 ? 's' : ''} antes de actualizar? ${dim('(' + names + ')')}`,
+      true,
+    );
+    if (wantsBackup) {
+      await backupAgents(filesToBackup);
+      backupApplied = true;
+    }
+    history.push({
+      label: 'Backup',
+      value: backupApplied
+        ? `${filesToBackup.length} archivo${filesToBackup.length > 1 ? 's respaldados' : ' respaldado'} en .opencode/agent_backup/`
+        : 'Saltado por el usuario',
+    });
+  } else {
+    history.push({
+      label: 'Backup',
+      value: 'No aplica (sin archivos modificables — solo faltantes)',
+    });
+  }
+
+  // ─── Step 4/4: Aplicar cambios ─────────────────────────────────────
+  renderWizardStep(printUpdateBanner, history, '[4/4] Aplicar cambios');
+
+  if (index === 0) {
+    await runUpdateWizard(updates);
+  } else {
+    await runUpdateAll(updates);
+  }
+
+  history.push({
+    label: 'Aplicado',
+    value: index === 0
+      ? 'Revisión finalizada — cambios aplicados según elegiste por archivo'
+      : `${totalOutdated + totalMissing} archivo${(totalOutdated + totalMissing) > 1 ? 's' : ''} actualizado${(totalOutdated + totalMissing) > 1 ? 's' : ''}`,
+  });
+
+  // ─── Pantalla final con resumen completo ───────────────────────────
+  renderWizardStep(printUpdateBanner, history, '');
+  console.log('  ' + green('Wizard de actualización completado.'));
   await pressEnterToContinue();
 }
 
