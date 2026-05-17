@@ -2120,6 +2120,85 @@ async function detectPackageManager() {
   return 'npm';
 }
 
+// Verifica si los paquetes de Memory están realmente presentes en node_modules.
+// Lo usamos como segunda señal después del install — pnpm/npm pueden retornar
+// exit code != 0 por warnings o por descargas parciales pero igual dejar los
+// paquetes utilizables.
+async function verifyMemoryDepsInstalled() {
+  const required = ['@xenova/transformers', '@qdrant/js-client-rest'];
+  const missing = [];
+  for (const dep of required) {
+    const pjPath = join(cwd(), 'node_modules', dep, 'package.json');
+    if (!await fileExists(pjPath)) missing.push(dep);
+  }
+  return { ok: missing.length === 0, missing };
+}
+
+// Ejecuta el comando de install hasta que tenga éxito o el usuario cancele.
+// Devuelve true si las dependencias quedaron utilizables (verificadas en
+// node_modules), false si el usuario abandonó.
+async function installMemoryDepsWithRetry(pm, depList) {
+  const installCmd = pm === 'yarn' ? 'add'
+                    : pm === 'pnpm' ? 'add'
+                    : pm === 'bun'  ? 'add'
+                    : 'install';
+
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    if (attempt > 1) {
+      console.log('');
+      console.log(dim(`  Reintento ${attempt - 1}/4...`));
+    }
+
+    rl.pause();
+    const exitCode = await runChild(pm, [installCmd, ...depList], `Instalar deps (${pm})`);
+
+    const verify = await verifyMemoryDepsInstalled();
+
+    if (verify.ok) {
+      if (exitCode !== 0) {
+        console.log('');
+        console.log(yellow(`  ⚠ ${pm} retornó exit code ${exitCode} pero los paquetes están en node_modules.`));
+        console.log(dim('    Probablemente warnings de subdependencias deprecadas o de scripts opcionales.'));
+        console.log(dim('    Continuamos — los paquetes principales están utilizables.'));
+      }
+      return { ok: true, exitCode };
+    }
+
+    // Falló y faltan paquetes
+    console.log('');
+    console.log(red(`  ✗ Faltan paquetes en node_modules: ${verify.missing.join(', ')}`));
+    console.log(dim('    Exit code de ' + pm + ': ' + exitCode));
+    console.log('');
+    console.log('  ' + bold('Causas comunes:'));
+    console.log('    ' + dim('· Red/firewall bloqueando descarga de binarios nativos (onnxruntime).'));
+    console.log('    ' + dim('· Antivirus interceptando archivos durante la descarga.'));
+    console.log('    ' + dim('· Mirror de npm/pnpm temporal con problemas.'));
+    console.log('    ' + dim('· Espacio en disco insuficiente (los paquetes pesan ~50-80 MB).'));
+    console.log('');
+
+    const choice = await tuiSelect(
+      '\n¿Qué hacés?',
+      [
+        `Reintentar con ${pm}`,
+        'Reintentar con npm (en caso de bug específico de ' + pm + ')',
+        'Cancelar instalación de Memory',
+      ],
+      0,
+    );
+
+    if (choice.index === 2) {
+      return { ok: false, exitCode, missing: verify.missing };
+    }
+    if (choice.index === 1) {
+      pm = 'npm';
+      // Reintenta el loop con npm
+    }
+    // index === 0 → reintenta con el mismo pm
+  }
+
+  return { ok: false, exitCode: -1, missing: ['(retries exhausted)'] };
+}
+
 // Convierte el nombre del proyecto en un slug válido para Qdrant collection name.
 // Qdrant acepta: alfanumérico + `_` + `-`. Caso edge: si el basename quedara vacío,
 // usamos un fallback derivado del path completo.
@@ -2351,22 +2430,33 @@ async function actionInstallMemory() {
   const depsJson = JSON.parse(depsRaw);
   const depList = Object.entries(depsJson.dependencies).map(([n, v]) => `${n}@${v}`);
   console.log('  Instalando: ' + cyan(depList.join(', ')));
+  console.log(dim('  (paquetes incluyen binarios nativos onnxruntime ~50-80 MB)'));
 
-  rl.pause();
-  const installCmd = pm === 'yarn' ? 'add'
-                    : pm === 'pnpm' ? 'add'
-                    : pm === 'bun'  ? 'add'
-                    : 'install';
-  const depCode = await runChild(pm, [installCmd, ...depList], `Instalar deps (${pm})`);
-
-  if (depCode !== 0) {
-    history.push({ label: 'Dependencias', value: 'Falló la instalación' });
-    renderWizardStep(printMemoryBanner, history, '');
-    console.log('  ' + red('✗ Falló la instalación de dependencias. Revisá el output arriba.'));
-    await pressEnterToContinue();
-    return;
+  // Pre-check: si las deps ya estaban instaladas (re-run del wizard), saltamos
+  const preCheck = await verifyMemoryDepsInstalled();
+  let installSummary;
+  if (preCheck.ok) {
+    console.log('');
+    console.log('  ' + green('✓ Ambos paquetes ya están en node_modules — salteando install.'));
+    installSummary = `Ya instalados (reusados de instalación previa)`;
+  } else {
+    const result = await installMemoryDepsWithRetry(pm, depList);
+    if (!result.ok) {
+      history.push({ label: 'Dependencias', value: `Falló — faltan: ${result.missing.join(', ')}` });
+      renderWizardStep(printMemoryBanner, history, '');
+      console.log('  ' + red('✗ No se pudieron instalar las dependencias.'));
+      console.log('');
+      console.log('  ' + dim('  Probá manualmente:'));
+      console.log('    ' + cyan(`${pm} ${pm === 'npm' ? 'install' : 'add'} ${depList.join(' ')}`));
+      console.log('  ' + dim('  Cuando estén instaladas, volvé a entrar a "Memory (RAG)".'));
+      await pressEnterToContinue();
+      return;
+    }
+    installSummary = result.exitCode === 0
+      ? `${depList.length} paquetes instalados con ${pm}`
+      : `${depList.length} paquetes instalados con ${pm} (exit ${result.exitCode}, warnings ignorados)`;
   }
-  history.push({ label: 'Dependencias', value: `${depList.length} paquetes instalados con ${pm}` });
+  history.push({ label: 'Dependencias', value: installSummary });
 
   // ─── Step 4/6: Copiar engine al proyecto ────────────────────────────
   renderWizardStep(printMemoryBanner, history, '[4/6] Copiar engine al proyecto');
