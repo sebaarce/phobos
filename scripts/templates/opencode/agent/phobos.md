@@ -17,19 +17,32 @@ permission:
   webfetch: deny
   bash:
     "*": ask
+    # Read-only inspection — bash / Unix
     "ls *": allow
     "cat *": allow
+    "find *": allow
+    "head *": allow
+    "tail *": allow
+    "wc *": allow
+    # Read-only inspection — Windows PowerShell
+    "Get-ChildItem *": allow
+    "Get-Content *": allow
+    "Get-Item *": allow
+    "Resolve-Path *": allow
+    "Test-Path *": allow
+    # Git read-only
     "git status": allow
     "git diff*": allow
     "git log*": allow
+    "git show*": allow
+    # Git mutating — never
     "git add*": deny
     "git commit*": deny
     "git push*": deny
-    # Memory engine — scripts y healthchecks (bash y PowerShell)
+    "git reset --hard*": deny
+    # Memory engine — scripts y healthchecks
     "node vault/memory/.engine/*": allow
     "node.exe vault*": allow
-    "Test-Path *": allow
-    "ls vault/memory/.engine/*": allow
     "curl -sf http://localhost:6333/*": allow
     "curl -sf http://localhost*": allow
     "Invoke-WebRequest -Uri http://localhost*": allow
