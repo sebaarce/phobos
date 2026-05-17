@@ -352,20 +352,39 @@ function diagnoseMemoryFailure(output) {
         'O desde el submenú: "Re-instalar engine en este proyecto".',
       ];
     } else if (isSubDep) {
-      steps = [
-        `Falta una sub-dep nativa (${moduleName}). Suele ser binarios nativos`,
-        'que no se compilaron en postinstall.',
-        'Solución completa (reinstala todo limpio):',
-        '  Remove-Item -Recurse -Force node_modules, package-lock.json',
-        '  npm install --legacy-peer-deps',
-        '',
-        `Si el módulo es onnxruntime-node y estás en Windows, asegurate de tener`,
-        '  Build Tools for Visual Studio (workload "Desktop development with C++")',
-        '  https://visualstudio.microsoft.com/visual-cpp-build-tools/',
-        '',
-        'Alternativa: usar onnxruntime-web (WASM, sin compilación nativa) — pero',
-        '@xenova/transformers usa ambos según ambiente, no es trivial forzar el web.',
-      ];
+      // Caso específico: onnxruntime-node es optional de @xenova/transformers.
+      // Algunos npm flags lo saltan. Solución directa: instalarlo como top-level.
+      if (moduleName.startsWith('onnxruntime-node')) {
+        steps = [
+          `onnxruntime-node es una optional dependency de @xenova/transformers que no`,
+          'se instaló (común con --legacy-peer-deps o ciertas configs de npm).',
+          '',
+          'Solución directa — instalar onnxruntime-node como top-level:',
+          '  npm install --legacy-peer-deps onnxruntime-node@1.14.0',
+          '',
+          'Después reintentá el reindex.',
+          '',
+          'Notas:',
+          '· La versión 1.14.0 es la que matcha la usada internamente por @xenova/transformers@2.17.2.',
+          '· En Windows el postinstall descarga un prebuilt; no requiere Visual Studio',
+          '  Build Tools (a menos que el prebuilt para tu plataforma no exista).',
+          '· Si querés blindar el proyecto para futuros installs:',
+          '    npm install --legacy-peer-deps --include=optional',
+          '  (fuerza npm a procesar optional deps siempre).',
+        ];
+      } else {
+        steps = [
+          `Falta una sub-dep nativa (${moduleName}). Suele ser binarios nativos`,
+          'que no se compilaron en postinstall.',
+          'Solución completa (reinstala todo limpio):',
+          '  Remove-Item -Recurse -Force node_modules, package-lock.json',
+          '  npm install --legacy-peer-deps',
+          '',
+          'Si tenés problemas con bindings nativos en Windows, instalá:',
+          '  Build Tools for Visual Studio (workload "Desktop development with C++")',
+          '  https://visualstudio.microsoft.com/visual-cpp-build-tools/',
+        ];
+      }
     } else {
       steps = [
         `Solución sugerida — reinstalación limpia:`,
@@ -2494,9 +2513,10 @@ async function addLegacyPeerDepsToNpmrc() {
 // Verifica si los paquetes de Memory están realmente presentes en node_modules.
 // Lo usamos como segunda señal después del install — pnpm/npm pueden retornar
 // exit code != 0 por warnings o por descargas parciales pero igual dejar los
-// paquetes utilizables.
+// paquetes utilizables. Chequeamos también onnxruntime-node porque algunos
+// package managers saltan optional deps y eso rompe el engine al runtime.
 async function verifyMemoryDepsInstalled() {
-  const required = ['@xenova/transformers', '@qdrant/js-client-rest'];
+  const required = ['@xenova/transformers', '@qdrant/js-client-rest', 'onnxruntime-node'];
   const missing = [];
   for (const dep of required) {
     const pjPath = join(cwd(), 'node_modules', dep, 'package.json');
