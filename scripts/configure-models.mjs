@@ -461,6 +461,9 @@ const magenta = (s) => color('35', s);
 const red = (s) => color('31', s);
 const dim = (s) => color('2', s);
 const bold = (s) => color('1', s);
+// Naranja "true" via ANSI 256-color (208 = bright orange). Soportado en
+// todos los terminales modernos: Windows Terminal, iTerm2, gnome-terminal.
+const orange = (s) => color('38;5;208', s);
 
 // ═══════════════════════════════════════════════════════════════════
 // Header ASCII
@@ -486,7 +489,7 @@ function printHeader() {
     '╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝',
   ];
   console.log('');
-  for (const l of lines) console.log('  ' + cyan(l));
+  for (const l of lines) console.log('  ' + orange(l));
   console.log('');
   console.log('  ' + dim('Orquestador SDD para OpenCode'));
   console.log('');
@@ -502,7 +505,7 @@ function printUpdateBanner() {
     ' ╚═════╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝',
   ];
   console.log('');
-  for (const l of lines) console.log('  ' + cyan(l));
+  for (const l of lines) console.log('  ' + orange(l));
   console.log('');
   console.log('  ' + dim('Update — revisa templates ↻ diferentes / ⚠ faltantes'));
   console.log('');
@@ -518,7 +521,7 @@ function printModelsBanner() {
     '╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚══════╝',
   ];
   console.log('');
-  for (const l of lines) console.log('  ' + cyan(l));
+  for (const l of lines) console.log('  ' + orange(l));
   console.log('');
   console.log('  ' + dim('Models — asigná un modelo a cada agente'));
   console.log('');
@@ -534,9 +537,25 @@ function printToolsBanner() {
     '   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝',
   ];
   console.log('');
-  for (const l of lines) console.log('  ' + cyan(l));
+  for (const l of lines) console.log('  ' + orange(l));
   console.log('');
   console.log('  ' + dim('Tools — autoskills, obsidian, impeccable, opencode'));
+  console.log('');
+}
+
+function printMemoryBanner() {
+  const lines = [
+    '███╗   ███╗███████╗███╗   ███╗ ██████╗ ██████╗ ██╗   ██╗',
+    '████╗ ████║██╔════╝████╗ ████║██╔═══██╗██╔══██╗╚██╗ ██╔╝',
+    '██╔████╔██║█████╗  ██╔████╔██║██║   ██║██████╔╝ ╚████╔╝ ',
+    '██║╚██╔╝██║██╔══╝  ██║╚██╔╝██║██║   ██║██╔══██╗  ╚██╔╝  ',
+    '██║ ╚═╝ ██║███████╗██║ ╚═╝ ██║╚██████╔╝██║  ██║   ██║   ',
+    '╚═╝     ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ',
+  ];
+  console.log('');
+  for (const l of lines) console.log('  ' + orange(l));
+  console.log('');
+  console.log('  ' + dim('Memory — RAG sobre el vault con @xenova/transformers + Qdrant'));
   console.log('');
 }
 
@@ -2056,6 +2075,309 @@ async function actionInstallTools() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Memory installer — Qdrant GLOBAL en ~/.phobos/ + collection per project
+// ═══════════════════════════════════════════════════════════════════
+
+// Engine files que se copian al proyecto destino. El docker-compose y el
+// storage de Qdrant ya NO se copian al proyecto — viven globales en ~/.phobos/.
+const MEMORY_ENGINE_FILES = [
+  // src (relativo a TEMPLATES_DIR) → dst (relativo al cwd del proyecto)
+  { src: 'phobos/memory/.engine/config.json',         dst: 'vault/memory/.engine/config.json' },
+  { src: 'phobos/memory/.engine/embed.mjs',           dst: 'vault/memory/.engine/embed.mjs' },
+  { src: 'phobos/memory/.engine/chunk.mjs',           dst: 'vault/memory/.engine/chunk.mjs' },
+  { src: 'phobos/memory/.engine/qdrant-client.mjs',   dst: 'vault/memory/.engine/qdrant-client.mjs' },
+  { src: 'phobos/memory/.engine/index-vault.mjs',     dst: 'vault/memory/.engine/index-vault.mjs' },
+  { src: 'phobos/memory/.engine/search.mjs',          dst: 'vault/memory/.engine/search.mjs' },
+  { src: 'phobos/memory/.engine/README.md',           dst: 'vault/memory/.engine/README.md' },
+];
+
+// Path global donde vive la instancia compartida de Qdrant.
+const PHOBOS_HOME = join(homedir(), '.phobos');
+const QDRANT_COMPOSE_GLOBAL = join(PHOBOS_HOME, 'docker-compose.qdrant.yml');
+const QDRANT_URL = 'http://localhost:6333';
+const QDRANT_CONTAINER = 'phobos-qdrant';
+
+function checkCommand(cmd) {
+  // Run with shell:true so PATH resolution works on Windows.
+  const r = tryExec(platform === 'win32' ? `where ${cmd}` : `command -v ${cmd}`, 3000);
+  return r.ok && r.out.trim().length > 0;
+}
+
+async function readPackageJson() {
+  try {
+    const raw = await readFile(join(cwd(), 'package.json'), 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function detectPackageManager() {
+  if (await fileExists('pnpm-lock.yaml')) return 'pnpm';
+  if (await fileExists('yarn.lock')) return 'yarn';
+  if (await fileExists('bun.lockb') || await fileExists('bun.lock')) return 'bun';
+  return 'npm';
+}
+
+// Convierte el nombre del proyecto en un slug válido para Qdrant collection name.
+// Qdrant acepta: alfanumérico + `_` + `-`. Caso edge: si el basename quedara vacío,
+// usamos un fallback derivado del path completo.
+function projectCollectionSlug() {
+  const base = basename(cwd()).toLowerCase();
+  let slug = base.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug) {
+    // Edge case: proyectos con nombres exóticos. Hash corto del path.
+    slug = 'project-' + Buffer.from(cwd()).toString('hex').slice(0, 8);
+  }
+  return `phobos-vault-${slug}`;
+}
+
+// Estado de Qdrant global. Devuelve { containerRunning, healthy }.
+async function detectQdrantStatus() {
+  const ps = tryExec(
+    `docker ps --filter name=${QDRANT_CONTAINER} --filter status=running --format "{{.Names}}"`,
+    4000,
+  );
+  const containerRunning = ps.ok && ps.out.trim() === QDRANT_CONTAINER;
+
+  let healthy = false;
+  if (containerRunning) {
+    // Intenta el endpoint /healthz con timeout corto. fetch global (Node 18+).
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      const r = await fetch(`${QDRANT_URL}/healthz`, { signal: controller.signal });
+      clearTimeout(timer);
+      healthy = r.ok;
+    } catch {
+      healthy = false;
+    }
+  }
+
+  return { containerRunning, healthy };
+}
+
+// Asegura que ~/.phobos/ exista y tenga el docker-compose.qdrant.yml copiado.
+// Idempotente: si ya existen, no los toca.
+async function ensurePhobosHome() {
+  await mkdir(PHOBOS_HOME, { recursive: true });
+  await mkdir(join(PHOBOS_HOME, 'qdrant-storage'), { recursive: true });
+
+  if (!await fileExists(QDRANT_COMPOSE_GLOBAL)) {
+    const srcPath = join(TEMPLATES_DIR, 'phobos/memory/docker-compose.qdrant.yml');
+    if (!await fileExists(srcPath)) {
+      throw new Error(`Template no encontrado: ${srcPath}`);
+    }
+    const content = await readFile(srcPath, 'utf-8');
+    await writeFile(QDRANT_COMPOSE_GLOBAL, content);
+    return { created: true };
+  }
+  return { created: false };
+}
+
+// Copia el engine al proyecto + reescribe config.json con el collection slug
+// específico de este proyecto. Esto es lo que hace que cada proyecto tenga su
+// propia "memoria" dentro de la instancia global de Qdrant.
+async function copyMemoryEngineToProject(collectionName) {
+  for (const file of MEMORY_ENGINE_FILES) {
+    const srcPath = join(TEMPLATES_DIR, file.src);
+    const dstPath = join(cwd(), file.dst);
+    if (!await fileExists(srcPath)) {
+      console.log(yellow(`  ⚠ template no encontrado: ${file.src}`));
+      continue;
+    }
+    await mkdir(dirname(dstPath), { recursive: true });
+    let content = await readFile(srcPath, 'utf-8');
+
+    // Para config.json — substituir el collection name por el slug del proyecto.
+    if (basename(file.src) === 'config.json') {
+      const parsed = JSON.parse(content);
+      parsed.qdrant.collection = collectionName;
+      content = JSON.stringify(parsed, null, 2) + '\n';
+    }
+
+    await writeFile(dstPath, content);
+    console.log(dim('  · ') + cyan(file.dst));
+  }
+}
+
+async function appendGitignoreSnippet() {
+  const snippetPath = join(TEMPLATES_DIR, 'phobos/memory/.gitignore.snippet');
+  if (!await fileExists(snippetPath)) return;
+  const snippet = await readFile(snippetPath, 'utf-8');
+  const gitignorePath = join(cwd(), '.gitignore');
+  let existing = '';
+  try { existing = await readFile(gitignorePath, 'utf-8'); } catch {}
+  if (existing.includes('vault/memory/.engine/.index-state.json')) {
+    console.log(dim('  · .gitignore ya tiene la entrada de memory.'));
+    return;
+  }
+  const joined = (existing.trim() + '\n\n' + snippet.trim() + '\n').replace(/^\s+/, '');
+  await writeFile(gitignorePath, joined);
+  console.log(dim('  · .gitignore actualizado con .index-state.json'));
+}
+
+async function actionInstallMemory() {
+  const history = [];
+
+  // ─── Step 1/6: Verificar prerequisitos ──────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[1/6] Verificar prerequisitos');
+
+  const dockerOK = checkCommand('docker');
+  const nodeOK = checkCommand('node');
+  const pkg = await readPackageJson();
+
+  console.log('  ' + (dockerOK ? green('✓') : red('✗')) + ' docker');
+  console.log('  ' + (nodeOK ? green('✓') : red('✗')) + ' node');
+  console.log('  ' + (pkg ? green('✓') : red('✗')) + ' package.json (proyecto Node)');
+
+  if (!dockerOK || !nodeOK || !pkg) {
+    console.log('');
+    if (!dockerOK) console.log('  ' + yellow('Docker es necesario para correr Qdrant local. Instalalo desde docker.com/get-started'));
+    if (!nodeOK) console.log('  ' + yellow('Node es necesario para el engine de embeddings.'));
+    if (!pkg) console.log('  ' + yellow('El proyecto destino debe tener package.json (Node/TS). Memory no aplica a otros stacks.'));
+    history.push({ label: 'Prerequisitos', value: 'Faltantes — wizard cancelado' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log('  ' + yellow('No se puede continuar. Resolvé los prerequisitos y reintentá.'));
+    await pressEnterToContinue();
+    return;
+  }
+
+  history.push({ label: 'Prerequisitos', value: 'docker ✓, node ✓, package.json ✓' });
+
+  // ─── Step 2/6: Detección de Qdrant global + package manager ─────────
+  renderWizardStep(printMemoryBanner, history, '[2/6] Detectar Qdrant global y package manager');
+
+  const qdrant = await detectQdrantStatus();
+  const pm = await detectPackageManager();
+  const collectionName = projectCollectionSlug();
+
+  console.log('  ' + dim('Qdrant global: ') + (
+    qdrant.containerRunning && qdrant.healthy ? green('✓ corriendo y healthy en ' + QDRANT_URL)
+    : qdrant.containerRunning ? yellow('⚠ contenedor up pero sin responder a /healthz aún')
+    : dim('— no está corriendo (se levantará en el paso 5)')
+  ));
+  console.log('  ' + dim('Package manager: ') + cyan(pm));
+  console.log('  ' + dim('Collection name: ') + cyan(collectionName));
+  console.log('  ' + dim('Global compose: ') + cyan(QDRANT_COMPOSE_GLOBAL));
+
+  history.push({
+    label: 'Estado inicial',
+    value: `Qdrant global ${qdrant.healthy ? 'corriendo' : 'no corriendo'} · pm=${pm} · collection=${collectionName}`,
+  });
+
+  const proceed = await tuiYesNo('\n¿Continuar con la instalación de Memory en este proyecto?', true);
+  if (!proceed) {
+    history.push({ label: 'Confirmación', value: 'Cancelado por el usuario' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log('  ' + dim('⊘ Instalación saltada.'));
+    await pressEnterToContinue();
+    return;
+  }
+
+  // ─── Step 3/6: Instalar dependencias npm ────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[3/6] Instalar dependencias del proyecto');
+
+  const depsRaw = await readFile(join(TEMPLATES_DIR, 'phobos/memory/package-deps.json'), 'utf-8');
+  const depsJson = JSON.parse(depsRaw);
+  const depList = Object.entries(depsJson.dependencies).map(([n, v]) => `${n}@${v}`);
+  console.log('  Instalando: ' + cyan(depList.join(', ')));
+
+  rl.pause();
+  const installCmd = pm === 'yarn' ? 'add'
+                    : pm === 'pnpm' ? 'add'
+                    : pm === 'bun'  ? 'add'
+                    : 'install';
+  const depCode = await runChild(pm, [installCmd, ...depList], `Instalar deps (${pm})`);
+
+  if (depCode !== 0) {
+    history.push({ label: 'Dependencias', value: 'Falló la instalación' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log('  ' + red('✗ Falló la instalación de dependencias. Revisá el output arriba.'));
+    await pressEnterToContinue();
+    return;
+  }
+  history.push({ label: 'Dependencias', value: `${depList.length} paquetes instalados con ${pm}` });
+
+  // ─── Step 4/6: Copiar engine al proyecto ────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[4/6] Copiar engine al proyecto');
+
+  await copyMemoryEngineToProject(collectionName);
+  await appendGitignoreSnippet();
+  history.push({
+    label: 'Engine',
+    value: `${MEMORY_ENGINE_FILES.length} archivos en vault/memory/.engine/ · collection=${collectionName}`,
+  });
+
+  // ─── Step 5/6: Preparar Qdrant GLOBAL ───────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[5/6] Preparar Qdrant global en ~/.phobos/');
+
+  const homeResult = await ensurePhobosHome();
+  console.log('  ' + dim('~/.phobos/ ') + (homeResult.created ? green('creado') : dim('ya existía')));
+  console.log('  ' + dim('docker-compose.qdrant.yml: ') + cyan(QDRANT_COMPOSE_GLOBAL));
+
+  if (qdrant.containerRunning && qdrant.healthy) {
+    console.log('  ' + green('✓ Qdrant ya está corriendo — reutilizando instancia global.'));
+    history.push({ label: 'Qdrant global', value: 'Ya corriendo, reutilizado' });
+  } else {
+    console.log('');
+    console.log('  ' + dim('Levantando Qdrant global con docker compose...'));
+    rl.pause();
+    const composeCode = await runChild(
+      'docker',
+      ['compose', '-f', QDRANT_COMPOSE_GLOBAL, 'up', '-d'],
+      'docker compose up -d (qdrant global)',
+    );
+    if (composeCode !== 0) {
+      history.push({ label: 'Qdrant global', value: 'Falló el docker compose' });
+      renderWizardStep(printMemoryBanner, history, '');
+      console.log('  ' + yellow('Engine instalado, pero Qdrant no arrancó.'));
+      console.log('  ' + dim('  Arrancá Docker Desktop y corré manualmente:'));
+      console.log('    ' + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} up -d`));
+      console.log('  ' + dim('Después, indexá con:'));
+      console.log('    ' + cyan('node vault/memory/.engine/index-vault.mjs'));
+      await pressEnterToContinue();
+      return;
+    }
+    history.push({ label: 'Qdrant global', value: 'Levantado en ' + QDRANT_URL });
+
+    console.log(dim('\n  Esperando a que Qdrant esté listo (5s)...'));
+    await new Promise(r => setTimeout(r, 5000));
+  }
+
+  // ─── Step 6/6: Indexación inicial ───────────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[6/6] Indexación inicial del vault');
+
+  rl.pause();
+  const indexCode = await runChild(
+    'node',
+    ['vault/memory/.engine/index-vault.mjs'],
+    'index-vault.mjs (full)',
+  );
+  if (indexCode !== 0) {
+    history.push({ label: 'Indexación', value: 'Falló — corré manualmente cuando puedas' });
+  } else {
+    history.push({ label: 'Indexación', value: `Vault indexado en collection ${collectionName}` });
+  }
+
+  // ─── Pantalla final ─────────────────────────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '');
+  console.log('  ' + green('Memory engine instalado y conectado a Qdrant global.'));
+  console.log('');
+  console.log('  ' + dim('Tu collection en Qdrant: ') + cyan(collectionName));
+  console.log('  ' + dim('Otros proyectos con Phobos van a tener su propia collection en la misma instancia.'));
+  console.log('');
+  console.log('  ' + dim('Comandos útiles:'));
+  console.log('    ' + cyan('node vault/memory/.engine/search.mjs "<query>"'));
+  console.log('    ' + cyan('node vault/memory/.engine/index-vault.mjs --incremental'));
+  console.log('    ' + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} down`) + dim('  (parar Qdrant global)'));
+  console.log('    ' + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} up -d`) + dim('  (levantar Qdrant global)'));
+  console.log('');
+  console.log('  ' + dim('Dashboard Qdrant: ') + cyan('http://localhost:6333/dashboard'));
+  await pressEnterToContinue();
+}
+
 async function pressEnterToContinue() {
   console.log('');
   console.log(dim('  Presioná Enter o Esc para volver al menú...'));
@@ -2093,11 +2415,22 @@ function renderMainMenuHeader(agentDir, installState) {
   const updatesStatus = installState.pendingUpdates > 0
     ? yellow(`↻ ${installState.pendingUpdates} pendiente${installState.pendingUpdates > 1 ? 's' : ''}`)
     : green('✓ al día');
+  let memoryStatus;
+  if (!installState.memoryInstalled) {
+    memoryStatus = dim('— no instalado');
+  } else if (installState.qdrantRunning === true) {
+    memoryStatus = green('✓ instalado') + dim('  ·  Qdrant global: ') + green('✓ corriendo');
+  } else if (installState.qdrantRunning === false) {
+    memoryStatus = green('✓ instalado') + dim('  ·  Qdrant global: ') + yellow('⚠ no corriendo');
+  } else {
+    memoryStatus = green('✓ instalado');
+  }
 
   console.log('  ' + dim('Proyecto:') + ' ' + cyan(projectName));
   console.log('  ' + dim('Agentes: ') + agentsStatus
     + dim('  ·  vault: ') + vaultStatus
     + dim('  ·  templates: ') + updatesStatus);
+  console.log('  ' + dim('Memory:  ') + memoryStatus);
   console.log('');
 }
 
@@ -2119,7 +2452,21 @@ async function getMainMenuState(agentDir) {
     pendingUpdates = updates.outdated.length + updates.missing.length;
   } catch {}
 
-  return { agentsInstalled, agentCount, vaultPresent, pendingUpdates };
+  const memoryInstalled = await fileExists('vault/memory/.engine/config.json');
+
+  // Qdrant global state — solo chequeamos si memory está instalada para no
+  // gastar un docker ps innecesario en cada render del menú principal.
+  let qdrantRunning = null;
+  if (memoryInstalled) {
+    try {
+      const s = await detectQdrantStatus();
+      qdrantRunning = s.containerRunning && s.healthy;
+    } catch {
+      qdrantRunning = false;
+    }
+  }
+
+  return { agentsInstalled, agentCount, vaultPresent, pendingUpdates, memoryInstalled, qdrantRunning };
 }
 
 // Envuelve una acción del wizard de forma que si el usuario apreta Esc
@@ -2146,6 +2493,10 @@ async function runMainMenu(agentDir) {
       ? 'Actualizar agentes      ' + dim(`(${state.pendingUpdates} pendiente${state.pendingUpdates > 1 ? 's' : ''})`)
       : 'Actualizar agentes      ' + dim('(al día)');
 
+    const memoryLabel = state.memoryInstalled
+      ? 'Memory (RAG)            ' + dim('(instalado · re-indexar / reconfigurar)')
+      : 'Memory (RAG)            ' + dim('(instalar engine de búsqueda semántica)');
+
     // En el menú principal Esc no tiene sentido (no hay "menú padre"),
     // pero si el usuario lo apreta, lo tratamos como "no acción" — solo re-rendereamos.
     let choice;
@@ -2156,6 +2507,7 @@ async function runMainMenu(agentDir) {
           updateLabel,
           'Setear modelos de agentes',
           'Instalar herramientas',
+          memoryLabel,
           dim('Salir'),
         ],
         0,
@@ -2173,6 +2525,8 @@ async function runMainMenu(agentDir) {
     } else if (index === 2) {
       await runAction(() => actionInstallTools());
     } else if (index === 3) {
+      await runAction(() => actionInstallMemory());
+    } else if (index === 4) {
       clearScreen();
       showHappyGoodbye();
       finalizeAndExit(0);

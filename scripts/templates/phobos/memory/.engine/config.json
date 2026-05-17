@@ -1,0 +1,30 @@
+{
+  "$schema": "./config.schema.json",
+  "model": {
+    "name": "Xenova/multilingual-e5-small",
+    "dimensions": 384,
+    "pooling": "mean",
+    "normalize": true
+  },
+  "chunking": {
+    "size": 512,
+    "overlap": 64,
+    "minSize": 80
+  },
+  "qdrant": {
+    "url": "http://localhost:6333",
+    "collection": "phobos-vault",
+    "distance": "Cosine"
+  },
+  "search": {
+    "topK": 5,
+    "similarityThreshold": 0.7
+  },
+  "vault": {
+    "roots": [
+      "vault/memory/insights",
+      "vault/memory/wiki",
+      "vault/memory/glossary"
+    ]
+  }
+}

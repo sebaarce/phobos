@@ -24,6 +24,8 @@ permission:
     "rg*": allow
     "Select-String*": allow
     "find*": allow
+    "node vault/memory/.engine/*": allow
+    "npx*": allow
 security:
   slug_regex: "^[a-zA-Z0-9_-]{3,60}$"
   forbidden_paths:
@@ -242,6 +244,36 @@ Change `Status:` to `done` / `partial` / `abandoned`. Replace the traceability w
   ```
   - [[<slug>]] — <YYYY-MM-DD> — <result> — <goal>
   ```
+
+#### 4g. Trigger semantic re-index (memory engine)
+
+If the memory engine is installed, run the incremental indexer so the next task's Researcher pre-flight sees the new insights/wiki/glossary you just wrote.
+
+```bash
+ls vault/memory/.engine/index-vault.mjs 2>/dev/null
+```
+
+If the file exists, execute:
+
+```bash
+node vault/memory/.engine/index-vault.mjs --incremental
+```
+
+Expected behavior:
+- Reads `vault/memory/.engine/.index-state.json` to know what changed.
+- Re-embeds only the files whose SHA-1 hash differs from the stored hash.
+- Upserts the new vectors into the Qdrant collection.
+- Exits 0 on success.
+
+**Failure modes** (do NOT fail the Close task — record and continue):
+
+| Condition | What you do |
+|-----------|-------------|
+| Engine file does not exist | Skip silently. The project does not have Memory installed. |
+| Qdrant unreachable (`docker compose down`) | Log a follow-up in `conclusion.md`: "Memory re-index skipped — Qdrant unreachable. Run `docker compose -f docker-compose.qdrant.yml up -d && node vault/memory/.engine/index-vault.mjs --incremental` to catch up." |
+| Indexer exits non-zero for any other reason | Capture the exit code and last 5 lines of stderr; log them in `conclusion.md` under "Follow-ups". |
+
+In all failure cases the Close task itself completes — the re-index is best-effort, not blocking.
 
 ### Mode 5 — Skip tester
 

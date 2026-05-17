@@ -59,7 +59,8 @@ security:
     - "~/.npmrc"
     - "~/.pypirc"
   audit_trace: true
-  max_word_count: 400
+  max_word_count: 800
+  max_previous_insights_tokens: 300
   overwrite_policy: "replace"
 ---
 
@@ -75,6 +76,35 @@ The English prompt exists for performance — Spanish output exists because Phob
 
 The `research.md` file itself is written in **English** (so future skills and tooling parse it consistently), with the same structure (`## Goal understood`, `## Relevant files and symbols`, `## Dependencies and contracts`, `## Constraints and risks`, `## Open questions`, `## Updated <date>`, traceability footer).
 
+## Pre-flight: semantic search over the vault (memory engine)
+
+**Before** writing `research.md`, check whether the project has the Phobos memory engine installed:
+
+```bash
+ls vault/memory/.engine/search.mjs 2>/dev/null
+```
+
+If the file exists, **run a semantic search** with the task goal as the query:
+
+```bash
+node vault/memory/.engine/search.mjs "<task goal in 1 sentence>" --top 3 --json
+```
+
+Parse the JSON output (an array of `{score, filePath, sectionTitle, text}`). Use the results to populate the `## Previous insights` section of `research.md` (template below).
+
+**If the engine is NOT installed**, skip this step. Do not block — write `research.md` without the `## Previous insights` section, but note in `## Open questions`:
+
+> Memory engine not installed in this project. Phobos may want to run `npx github:sebaarce/phobos` → "Memory (RAG)" so future tasks have semantic recall over the vault.
+
+**If the engine is installed but Qdrant is unreachable** (search.mjs exits non-zero), write the section with the literal note:
+
+```markdown
+## Previous insights
+> _(memory engine unreachable — Qdrant likely stopped. Skipping semantic context for this task.)_
+```
+
+Token budget: the `## Previous insights` section must stay under `security.max_previous_insights_tokens` (300 tokens). This is separate from the main `security.max_word_count` (800 words). Truncate excerpts as needed.
+
 ## What you deliver
 
 You write to `vault/memory/tasks/<slug>/research.md` (Phobos passes you the slug). Structure:
@@ -84,6 +114,18 @@ You write to `vault/memory/tasks/<slug>/research.md` (Phobos passes you the slug
 
 ## Goal understood
 <one sentence with the task>
+
+## Previous insights
+> Retrieved via `vault/memory/.engine/search.mjs`. Only chunks with similarity ≥ 0.7.
+> Wikilinks point to the source notes in the vault.
+
+- **[[react-hook-form-zod]]** § Validation setup  _(similarity 0.842)_
+  > Use zod resolver with `react-hook-form` for type-safe forms. The `zodResolver` from `@hookform/resolvers/zod` wires validation errors automatically. Common pitfall: ...
+- **[[oauth-pkce]]** § Token rotation  _(similarity 0.781)_
+  > PKCE refresh flow requires the original `code_verifier`. Store it server-side, not in localStorage. ...
+
+_(If none above threshold, write: "_no matching insights above threshold 0.7._")_
+_(If engine not installed: omit this whole section and note in Open questions.)_
 
 ## Stack detected
 - **Primary language**: typescript (5.4)
@@ -310,12 +352,13 @@ Phobos and the Planner can check that `research.md` was not edited manually:
 
 1. Did you cite verifiable paths and lines (`file:NN`)?
 2. Did you only describe what exists, without proposing solutions?
-3. **Did you include the `## Stack detected` section with language, framework, test framework, build tool?** If multi-language, did you flag ambiguity in `## Open questions`?
-4. No transcribed secrets (tokens, keys, passwords, env values)?
-5. Did you NOT read files in the `security.forbidden_read_files` list?
-6. Were all shell commands you ran inside the project cwd?
-7. Was output with ANSI / binary content sanitized before pasting?
-8. Is the research under `security.max_word_count` (~400 words)?
-9. Is the traceability line at the end with current timestamp?
+3. **Did you run the semantic search pre-flight?** If the memory engine is installed, the `## Previous insights` section is populated with top-3 chunks; if not installed, it is omitted and noted in Open questions.
+4. **Did you include the `## Stack detected` section with language, framework, test framework, build tool?** If multi-language, did you flag ambiguity in `## Open questions`?
+5. No transcribed secrets (tokens, keys, passwords, env values)?
+6. Did you NOT read files in the `security.forbidden_read_files` list?
+7. Were all shell commands you ran inside the project cwd?
+8. Was output with ANSI / binary content sanitized before pasting?
+9. Is the research under `security.max_word_count` (~800 words), and the `## Previous insights` section under `security.max_previous_insights_tokens` (~300 tokens)?
+10. Is the traceability line at the end with current timestamp?
 
 If any answer is "no", **do NOT deliver the research**. Ask Phobos for more context or deliver a partial research marking the problematic points in `## Open questions`.

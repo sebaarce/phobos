@@ -39,3 +39,6 @@ Thumbs.db
 
 .vscode/
 .claude/
+
+# Qdrant storage local (cuando levantás docker-compose.qdrant.yml desde el repo)
+qdrant-storage/
