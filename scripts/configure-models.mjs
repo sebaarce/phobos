@@ -316,21 +316,72 @@ function runChildCaptured(cmd, args, label) {
   });
 }
 
+// Extrae el nombre del módulo faltante del stack trace de ERR_MODULE_NOT_FOUND.
+function extractMissingModule(output) {
+  // Patrón 1: "Cannot find module 'X'" (CommonJS)
+  let m = output.match(/Cannot find module ['"]([^'"]+)['"]/);
+  if (m) return m[1];
+  // Patrón 2: "Cannot find package 'X'" (ESM)
+  m = output.match(/Cannot find package ['"]([^'"]+)['"]/);
+  if (m) return m[1];
+  // Patrón 3: ESM resolver — "imported from /.../node_modules/X/..."
+  m = output.match(/imported from\s+['"]?[^'"]*node_modules[\\\/]([@a-z0-9_.-]+(?:[\\\/][a-z0-9_.-]+)?)/i);
+  if (m) return m[1].replace(/\\/g, '/');
+  return null;
+}
+
 // Detecta patrones comunes en el output de un script de Memory y devuelve
 // un mensaje de diagnóstico accionable, o null si no encuentra nada conocido.
 function diagnoseMemoryFailure(output) {
-  if (/Cannot find module ['"]?@xenova\/transformers/i.test(output)
-   || /Cannot find module ['"]?@qdrant/i.test(output)
-   || /MODULE_NOT_FOUND/i.test(output)) {
-    return {
-      hint: 'Falta una dependencia npm del engine.',
-      steps: [
-        'Las dependencias no están instaladas en node_modules/.',
-        'Probablemente la instalación previa falló (ej: ERESOLVE en NestJS).',
-        'Solución: instalalas manualmente y reintentá.',
+  if (/Cannot find module|Cannot find package|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND/i.test(output)) {
+    const moduleName = extractMissingModule(output);
+    const isTopLevel = moduleName && (moduleName === '@xenova/transformers' || moduleName === '@qdrant/js-client-rest');
+    const isSubDep = moduleName && !isTopLevel && (
+      moduleName.startsWith('onnxruntime-')
+      || moduleName.includes('@huggingface')
+      || moduleName === 'sharp'
+    );
+
+    let steps;
+    if (isTopLevel || !moduleName) {
+      steps = [
+        'Las deps top-level del engine no están en node_modules/ (instalación parcial).',
+        'Probable causa: ERESOLVE en NPM v7+ (típico de NestJS/Angular).',
+        'Solución:',
         '  npm install --legacy-peer-deps @xenova/transformers @qdrant/js-client-rest',
         'O desde el submenú: "Re-instalar engine en este proyecto".',
-      ],
+      ];
+    } else if (isSubDep) {
+      steps = [
+        `Falta una sub-dep nativa (${moduleName}). Suele ser binarios nativos`,
+        'que no se compilaron en postinstall.',
+        'Solución completa (reinstala todo limpio):',
+        '  Remove-Item -Recurse -Force node_modules, package-lock.json',
+        '  npm install --legacy-peer-deps',
+        '',
+        `Si el módulo es onnxruntime-node y estás en Windows, asegurate de tener`,
+        '  Build Tools for Visual Studio (workload "Desktop development with C++")',
+        '  https://visualstudio.microsoft.com/visual-cpp-build-tools/',
+        '',
+        'Alternativa: usar onnxruntime-web (WASM, sin compilación nativa) — pero',
+        '@xenova/transformers usa ambos según ambiente, no es trivial forzar el web.',
+      ];
+    } else {
+      steps = [
+        `Solución sugerida — reinstalación limpia:`,
+        '  Remove-Item -Recurse -Force node_modules, package-lock.json',
+        '  npm install --legacy-peer-deps',
+        '',
+        'O instalación puntual del paquete que falta:',
+        `  npm install --legacy-peer-deps ${moduleName}`,
+      ];
+    }
+
+    return {
+      hint: moduleName
+        ? `Falta el módulo: ${moduleName}`
+        : 'Falta un módulo de Node (no se pudo identificar cuál).',
+      steps,
     };
   }
   if (/fatal:\s*Unauthorized/i.test(output) || /\b401\b/.test(output) || /api[\s_-]?key/i.test(output)) {
@@ -2978,11 +3029,27 @@ async function actionMemoryReindexForce() {
   console.log('');
 
   const fullOutput = result.stderr + '\n' + result.stdout;
-  const tail = (fullOutput.split('\n').filter(l => l.length > 0).slice(-8).join('\n')) || '(sin output)';
+  const allLines = fullOutput.split('\n').filter(l => l.length > 0);
 
-  console.log('  ' + bold('Últimas líneas del output:'));
-  for (const line of tail.split('\n')) {
-    console.log('    ' + dim(line));
+  // Si encontramos una línea con "Cannot find" la priorizamos en el tail.
+  const importantIdx = allLines.findIndex(l => /Cannot find (module|package)|MODULE_NOT_FOUND|fatal:/i.test(l));
+  let tailLines;
+  if (importantIdx >= 0) {
+    // Mostrar 3 líneas antes y 12 después del error (cubre el stack relevante)
+    const start = Math.max(0, importantIdx - 3);
+    const end = Math.min(allLines.length, importantIdx + 13);
+    tailLines = allLines.slice(start, end);
+  } else {
+    tailLines = allLines.slice(-15);
+  }
+
+  console.log('  ' + bold('Output relevante:'));
+  if (tailLines.length === 0) {
+    console.log('    ' + dim('(sin output capturado)'));
+  } else {
+    for (const line of tailLines) {
+      console.log('    ' + dim(line));
+    }
   }
 
   console.log('');
