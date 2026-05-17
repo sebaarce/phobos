@@ -281,6 +281,94 @@ function runChild(cmd, args, label) {
   });
 }
 
+// Variante de runChild que captura stdout/stderr Y los mirrora a la terminal
+// en vivo. Útil para scripts cuyo output necesitamos para diagnosticar errores
+// (el reindex de Memory, por ejemplo).
+function runChildCaptured(cmd, args, label) {
+  return new Promise((resolve) => {
+    console.log('\n' + cyan('▸ ') + bold(label));
+    console.log(dim('  ejecutando: ' + cmd + ' ' + args.join(' ')) + '\n');
+    const proc = spawn(cmd, args, { stdio: ['inherit', 'pipe', 'pipe'], shell: true });
+    let stdoutBuf = '';
+    let stderrBuf = '';
+    proc.stdout.on('data', (chunk) => {
+      const s = chunk.toString();
+      stdoutBuf += s;
+      stdout.write(s);
+    });
+    proc.stderr.on('data', (chunk) => {
+      const s = chunk.toString();
+      stderrBuf += s;
+      process.stderr.write(s);
+    });
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log(green('\n  ✓ ' + label + ' completado.\n'));
+      } else {
+        console.log(yellow('\n  ⚠ ' + label + ' terminó con código ' + code + '\n'));
+      }
+      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf });
+    });
+    proc.on('error', (err) => {
+      console.log(yellow('\n  ⚠ Error ejecutando ' + cmd + ': ' + err.message + '\n'));
+      resolve({ code: 1, stdout: '', stderr: err.message });
+    });
+  });
+}
+
+// Detecta patrones comunes en el output de un script de Memory y devuelve
+// un mensaje de diagnóstico accionable, o null si no encuentra nada conocido.
+function diagnoseMemoryFailure(output) {
+  if (/Cannot find module ['"]?@xenova\/transformers/i.test(output)
+   || /Cannot find module ['"]?@qdrant/i.test(output)
+   || /MODULE_NOT_FOUND/i.test(output)) {
+    return {
+      hint: 'Falta una dependencia npm del engine.',
+      steps: [
+        'Las dependencias no están instaladas en node_modules/.',
+        'Probablemente la instalación previa falló (ej: ERESOLVE en NestJS).',
+        'Solución: instalalas manualmente y reintentá.',
+        '  npm install --legacy-peer-deps @xenova/transformers @qdrant/js-client-rest',
+        'O desde el submenú: "Re-instalar engine en este proyecto".',
+      ],
+    };
+  }
+  if (/fatal:\s*Unauthorized/i.test(output) || /\b401\b/.test(output) || /api[\s_-]?key/i.test(output)) {
+    return {
+      hint: 'Qdrant está corriendo pero rechaza con Unauthorized.',
+      steps: [
+        'Bug del template viejo del docker-compose (línea QDRANT__SERVICE__API_KEY:"").',
+        'Solución: submenú Memory → "Reset Qdrant global". Regenera el compose limpio.',
+      ],
+    };
+  }
+  if (/qdrant unreachable/i.test(output) || /ECONNREFUSED/i.test(output)) {
+    return {
+      hint: 'Qdrant no responde.',
+      steps: [
+        'Levantalo con: docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d',
+        'Esperá 5 segundos y reintentá.',
+      ],
+    };
+  }
+  if (/ENOTFOUND|ETIMEDOUT|getaddrinfo|fetch failed/i.test(output)) {
+    return {
+      hint: 'Error de red — probablemente descarga del modelo Xenova.',
+      steps: [
+        'Verificá conexión a internet (la primera vez se descarga ~80 MB del modelo).',
+        'Reintentá. Si persiste, problemas con HuggingFace mirror.',
+      ],
+    };
+  }
+  if (/ENOSPC/i.test(output)) {
+    return {
+      hint: 'Sin espacio en disco.',
+      steps: ['Liberá espacio en el filesystem y reintentá.'],
+    };
+  }
+  return null;
+}
+
 async function installObsidianSkills() {
   // Instalación per-proyecto vía Skills CLI (npx skills add).
   // El ecosistema instala cada skill individualmente en .agents/skills/<skill>/SKILL.md
@@ -2853,19 +2941,62 @@ async function actionMemoryReindexForce() {
     return;
   }
 
+  // Pre-check: ¿están las deps?
+  const deps = await verifyMemoryDepsInstalled();
+  if (!deps.ok) {
+    history.push({ label: 'Re-indexación', value: 'Abortado — faltan deps en node_modules' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log(red('  ✗ Faltan dependencias en node_modules: ') + cyan(deps.missing.join(', ')));
+    console.log('');
+    console.log('  ' + dim('  La instalación previa de Memory no completó (probable ERESOLVE).'));
+    console.log('  ' + dim('  Solución:'));
+    console.log('    ' + cyan('  npm install --legacy-peer-deps @xenova/transformers @qdrant/js-client-rest'));
+    console.log('  ' + dim('  Después volvé a este submenú y reintentá.'));
+    await pressEnterToContinue();
+    return;
+  }
+
   rl.pause();
-  const code = await runChild(
+  const result = await runChildCaptured(
     'node',
     ['vault/memory/.engine/index-vault.mjs', '--force'],
     'index-vault.mjs --force',
   );
-  history.push({
-    label: 'Re-indexación',
-    value: code === 0 ? 'OK — todos los archivos re-vectorizados' : `Falló (exit ${code})`,
-  });
 
+  if (result.code === 0) {
+    history.push({ label: 'Re-indexación', value: 'OK — todos los archivos re-vectorizados' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log(green('  ✓ Re-index completo.'));
+    await pressEnterToContinue();
+    return;
+  }
+
+  // Falló — diagnóstico
+  history.push({ label: 'Re-indexación', value: `Falló (exit ${result.code})` });
   renderWizardStep(printMemoryBanner, history, '');
-  console.log(code === 0 ? green('  ✓ Re-index completo.') : red('  ✗ Re-index falló.'));
+  console.log(red('  ✗ Re-index falló (exit ' + result.code + ').'));
+  console.log('');
+
+  const fullOutput = result.stderr + '\n' + result.stdout;
+  const tail = (fullOutput.split('\n').filter(l => l.length > 0).slice(-8).join('\n')) || '(sin output)';
+
+  console.log('  ' + bold('Últimas líneas del output:'));
+  for (const line of tail.split('\n')) {
+    console.log('    ' + dim(line));
+  }
+
+  console.log('');
+  const diagnosis = diagnoseMemoryFailure(fullOutput);
+  if (diagnosis) {
+    console.log('  ' + bold(yellow('💡 Diagnóstico: ')) + diagnosis.hint);
+    for (const step of diagnosis.steps) {
+      console.log('  ' + dim('    ' + step));
+    }
+  } else {
+    console.log('  ' + dim('  No reconozco el error. Probá manualmente para ver más detalle:'));
+    console.log('    ' + cyan('node vault/memory/.engine/index-vault.mjs --force'));
+  }
+
   await pressEnterToContinue();
 }
 
