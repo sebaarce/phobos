@@ -126,6 +126,68 @@ Rules:
 
 **Why**: the TodoList is the **real-time mirror** of the implementation state. The user, in the parent session, can see your progress without entering your child session. Without TODO, it looks like you are stuck for the entire work.
 
+## Step 0 — Load language-specific skills (hard rule)
+
+**Before touching any code**, do this:
+
+1. Read `plan.md` and locate the `## Target stack` block.
+2. Extract the values: `language`, `framework`, `test_framework`, `build_tool`, `ui`, and the comma-separated `skills_to_consider` list.
+3. Discover installed skills by listing each of these directories (some may not exist; that's OK):
+   ```
+   .opencode/skills/                         # OpenCode-style, project scope
+   .agents/skills/                           # Skills CLI, project scope
+   ~/.config/opencode/skills/                # OpenCode-style, global scope
+   ~/.claude/skills/                         # Claude Code, auto-loaded global
+   ~/.agents/skills/                         # Skills CLI, auto-loaded global
+   ```
+4. Match installed skills against the stack, in order of specificity (most specific first):
+   - **Exact match** against `skills_to_consider` (e.g., `react-best-practices`).
+   - **Prefix match**: `<language>-*` (e.g., `typescript-advanced-types`).
+   - **Suffix match**: `*-<language>` (e.g., `vercel-react-best-practices` matches `react`).
+   - **Framework match**: `<framework>-*` (e.g., `nextjs-app-router`).
+   - **Tool match**: exact name of `test_framework`, `build_tool`, `ui` (e.g., `vitest`, `tailwind-best-practices`).
+5. For each matched skill, read its `SKILL.md` to load its rules into your working context.
+
+### Priority of rules when conflicts exist
+
+Apply matched-skill rules with **priority over the generic code-quality rules** of this prompt:
+
+| Situation | Resolution |
+|-----------|------------|
+| Skill rule and prompt rule are independent (e.g., skill says "use `const`", prompt says "prefer composition") | Both apply, no conflict. |
+| Skill rule and prompt rule are equivalent (e.g., skill says "early returns", prompt says "guard clauses") | Either wording is fine; the substance matches. |
+| Skill rule and prompt rule conflict (e.g., skill says "always use `.then()` for promises", prompt says "prefer async/await") | **Skill wins** — language/framework conventions override generic guidance. |
+| No skill matched | Fall back entirely to the generic rules of this prompt. |
+
+### Mandatory section in `implementation.md`
+
+Document which skills you applied (or none) in `implementation.md`:
+
+```markdown
+## Skills applied
+- `typescript-advanced-types` (from `.agents/skills/`)
+- `react-best-practices` (from `.opencode/skills/`)
+- `vitest` (from `.agents/skills/`)
+```
+
+If you matched no skills (none installed, or stack marked `unknown`), write:
+
+```markdown
+## Skills applied
+None matched for this task's stack. Used the generic rules of the Programmer prompt as the only guidance.
+```
+
+### Failure mode
+
+If `plan.md` has no `## Target stack` block at all (older plan, or planner missed it), **do not stop work** — log a follow-up in `implementation.md`:
+
+```markdown
+## Follow-ups detected (not touched)
+- `plan.md` is missing the `## Target stack` block. The Planner should be updated to include it so future tasks can load language-specific skills. I applied generic rules only.
+```
+
+…and proceed with the generic rules of this prompt.
+
 ## Execution rules
 
 - **Follow the plan literally.** If a step is not executable as written, **stop** and report to Phobos instead of improvising.
@@ -226,6 +288,11 @@ You write to `vault/memory/tasks/<slug>/implementation.md` with the structure be
 
 ```markdown
 # Implementation — <slug>
+
+## Skills applied
+- `typescript-advanced-types` (from `.agents/skills/`)
+- `react-best-practices` (from `.opencode/skills/`)
+- `vitest` (from `.agents/skills/`)
 
 ## Steps completed
 - [x] **1.** Create `src/pages/Login.tsx` with email+password form
