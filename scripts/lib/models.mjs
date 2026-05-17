@@ -351,7 +351,15 @@ export function agentHeaderBlock(idx, total, agent, role, currentModel, suggeste
 export async function pickFromList(allModels, promptHeader, current) {
   let filter = '';
   let cursorIdx = 0;
+  let viewportStart = 0;
   let linesPrinted = 0;
+
+  // Viewport: deja espacio para header (~3), indicadores arriba/abajo (~2),
+  // hint final (~1) y margen. Mínimo razonable 8 filas, sino se ve apretado.
+  function getViewportSize() {
+    const rows = stdout.rows || 24;
+    return Math.max(8, rows - 8);
+  }
 
   function buildRows() {
     const matches = filter
@@ -402,9 +410,23 @@ export async function pickFromList(allModels, promptHeader, current) {
     }
   }
 
+  function adjustViewport(rows, viewportSize) {
+    if (viewportStart > Math.max(0, rows.length - viewportSize)) {
+      viewportStart = Math.max(0, rows.length - viewportSize);
+    }
+    if (cursorIdx < viewportStart) {
+      viewportStart = cursorIdx;
+    } else if (cursorIdx >= viewportStart + viewportSize) {
+      viewportStart = cursorIdx - viewportSize + 1;
+    }
+    if (viewportStart < 0) viewportStart = 0;
+  }
+
   function render(firstTime) {
     const rows = buildRows();
     ensureValidCursor(rows);
+    const viewportSize = getViewportSize();
+    adjustViewport(rows, viewportSize);
 
     if (!firstTime && linesPrinted > 0) {
       stdout.write(`\x1b[${linesPrinted}A\x1b[J`);
@@ -421,7 +443,17 @@ export async function pickFromList(allModels, promptHeader, current) {
     if (filter) out('   ' + dim('filtro activo: "' + filter + '"'));
     out('');
 
-    for (let i = 0; i < rows.length; i++) {
+    const viewportEnd = Math.min(rows.length, viewportStart + viewportSize);
+    const hiddenAbove = viewportStart;
+    const hiddenBelow = rows.length - viewportEnd;
+
+    if (hiddenAbove > 0) {
+      out('      ' + dim('↑ ' + hiddenAbove + ' más arriba'));
+    } else {
+      out('');
+    }
+
+    for (let i = viewportStart; i < viewportEnd; i++) {
       const r = rows[i];
       const isCursor = i === cursorIdx;
       if (r.type === 'group') {
@@ -445,8 +477,14 @@ export async function pickFromList(allModels, promptHeader, current) {
       }
     }
 
+    if (hiddenBelow > 0) {
+      out('      ' + dim('↓ ' + hiddenBelow + ' más abajo'));
+    } else {
+      out('');
+    }
+
     out('');
-    out('  ' + dim('↑/↓ navegar  ·  Enter elegir  ·  / filtrar  ·  Esc o 0 dejar  ·  Ctrl+C salir'));
+    out('  ' + dim('↑/↓ navegar  ·  PgUp/PgDn saltar  ·  Enter elegir  ·  / filtrar  ·  Esc o 0 dejar'));
 
     linesPrinted = count;
   }
@@ -473,6 +511,7 @@ export async function pickFromList(allModels, promptHeader, current) {
       stdout.write('\n');
       filter = (await rl.question('  Filtro (vacío = limpiar): ')).trim();
       cursorIdx = 0;
+      viewportStart = 0;
       linesPrinted = 0;
       rl.pause();
       stdin.setRawMode(true);
