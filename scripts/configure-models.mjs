@@ -500,6 +500,90 @@ async function listQdrantCollections() {
   }
 }
 
+// Para cada collection, lee detalles (count, dims, distance).
+async function listQdrantCollectionsDetailed() {
+  const names = await listQdrantCollections();
+  const detailed = [];
+  for (const name of names) {
+    try {
+      const r = await fetch(`${QDRANT_URL}/collections/${encodeURIComponent(name)}`);
+      if (!r.ok) {
+        detailed.push({ name, points: 0, dims: 0, distance: '?', status: '?' });
+        continue;
+      }
+      const j = await r.json();
+      const result = j?.result || {};
+      detailed.push({
+        name,
+        points: result.points_count ?? 0,
+        dims: result.config?.params?.vectors?.size ?? 0,
+        distance: result.config?.params?.vectors?.distance ?? '?',
+        status: result.status ?? '?',
+      });
+    } catch {
+      detailed.push({ name, points: 0, dims: 0, distance: '?', status: '?' });
+    }
+  }
+  return detailed;
+}
+
+// Devuelve hasta N points de una collection (con payload completo).
+async function getCollectionSamples(name, limit = 3) {
+  try {
+    const r = await fetch(`${QDRANT_URL}/collections/${encodeURIComponent(name)}/points/scroll`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit, with_payload: true, with_vector: false }),
+    });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return j?.result?.points || [];
+  } catch {
+    return [];
+  }
+}
+
+// Recorre vault/memory/tasks/ y reporta cuántas tareas tienen evidencia de uso
+// del memory engine (Previous insights en research.md, conclusion cerrada).
+async function checkTaskMemoryUsage() {
+  const tasksDir = 'vault/memory/tasks';
+  const out = { total: 0, closed: 0, withPreviousInsights: 0, tasks: [] };
+  if (!await fileExists(tasksDir)) return out;
+
+  let entries = [];
+  try {
+    entries = await readdir(tasksDir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const slug = e.name;
+    const dir = join(tasksDir, slug);
+    const hasConclusion = await fileExists(join(dir, 'conclusion.md'));
+    const researchPath = join(dir, 'research.md');
+    const hasResearch = await fileExists(researchPath);
+    let hasPreviousInsights = false;
+    if (hasResearch) {
+      try {
+        const content = await readFile(researchPath, 'utf-8');
+        // Buscamos que tenga la sección Y que tenga al menos un bullet con [[wikilink]]
+        if (/##\s*Previous\s*insights/i.test(content)) {
+          const section = content.split(/##\s*Previous\s*insights/i)[1] || '';
+          const head = section.split(/\n##\s/)[0] || '';
+          hasPreviousInsights = /\[\[[^\]]+\]\]/.test(head) || /similarity\s+[\d.]+/i.test(head);
+        }
+      } catch {}
+    }
+    out.tasks.push({ slug, hasConclusion, hasResearch, hasPreviousInsights });
+    out.total++;
+    if (hasConclusion) out.closed++;
+    if (hasPreviousInsights) out.withPreviousInsights++;
+  }
+  return out;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Utilidades
 // ═══════════════════════════════════════════════════════════════════
@@ -2414,6 +2498,7 @@ async function actionMemory() {
       choice = await tuiSelect(
         '\n¿Qué querés hacer?',
         [
+          'Inspect Qdrant ' + dim('(estado, collections, samples, sanity de agentes — read-only)'),
           'Re-indexar este proyecto (--force, vuelve a vectorizar todo)',
           'Reset Qdrant global ' + dim('(destructivo · borra storage de TODOS los proyectos · backup opcional)'),
           'Re-instalar engine en este proyecto ' + dim('(sobreescribe vault/memory/.engine/ con templates frescos)'),
@@ -2426,15 +2511,125 @@ async function actionMemory() {
       throw err;
     }
 
-    if (choice.index === 3) return;
+    if (choice.index === 4) return;
     if (choice.index === 0) {
-      await runAction(() => actionMemoryReindexForce());
+      await runAction(() => actionInspectQdrant());
     } else if (choice.index === 1) {
-      await runAction(() => actionResetQdrant());
+      await runAction(() => actionMemoryReindexForce());
     } else if (choice.index === 2) {
+      await runAction(() => actionResetQdrant());
+    } else if (choice.index === 3) {
       await runAction(() => actionInstallMemory());
     }
   }
+}
+
+async function actionInspectQdrant() {
+  clearScreen();
+  printMemoryBanner();
+
+  panel('Inspect Qdrant — estado del engine', [
+    'Pantalla read-only. No modifica nada — solo lee el estado actual.',
+  ]);
+
+  // ── 1. Healthcheck ────────────────────────────────────────────────
+  const status = await detectQdrantStatus();
+  console.log('');
+  console.log('  ' + bold('Qdrant'));
+  if (!status.healthy) {
+    console.log('  ' + red('  ✗ no está corriendo o no responde'));
+    console.log('  ' + dim('    Levantalo con: ') + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} up -d`));
+    await pressEnterToContinue();
+    return;
+  }
+  console.log('  ' + green('  ✓ healthy en ') + cyan(QDRANT_URL));
+  console.log('  ' + dim('    Dashboard: ') + cyan(QDRANT_URL + '/dashboard'));
+
+  // ── 2. Collections en la instancia ───────────────────────────────
+  console.log('');
+  console.log('  ' + bold('Collections en la instancia global'));
+  const collections = await listQdrantCollectionsDetailed();
+  const mySlug = projectCollectionSlug();
+
+  if (collections.length === 0) {
+    console.log('  ' + dim('  (ninguna — instalá Memory en algún proyecto y se va a crear)'));
+  } else {
+    const maxName = Math.max(...collections.map(c => c.name.length));
+    for (const c of collections) {
+      const isMine = c.name === mySlug;
+      const marker = isMine ? green('  ← este proyecto') : '';
+      const nameLabel = isMine ? cyan(pad(c.name, maxName)) : pad(c.name, maxName);
+      console.log('  · ' + nameLabel + '  '
+        + dim(c.points + ' pts · ' + c.dims + 'd · ' + c.distance + ' · ' + c.status)
+        + marker);
+    }
+  }
+
+  // ── 3. Detalle de la collection del proyecto ──────────────────────
+  console.log('');
+  console.log('  ' + bold('Tu collection: ') + cyan(mySlug));
+  const mine = collections.find(c => c.name === mySlug);
+  if (!mine) {
+    console.log('  ' + yellow('  ⚠ La collection todavía no existe.'));
+    console.log('  ' + dim('    Corré: ') + cyan('node vault/memory/.engine/index-vault.mjs'));
+  } else if (mine.points === 0) {
+    console.log('  ' + yellow('  ⚠ Existe pero está vacía (0 points).'));
+    console.log('  ' + dim('    El archivist nunca indexó, o se reseteó. Corré: ') + cyan('node vault/memory/.engine/index-vault.mjs --force'));
+  } else {
+    console.log('  ' + dim('  Points totales: ') + cyan(mine.points));
+    console.log('  ' + dim('  Dimensiones:    ') + cyan(mine.dims + 'd, ' + mine.distance));
+
+    const samples = await getCollectionSamples(mySlug, 5);
+    if (samples.length > 0) {
+      console.log('  ' + dim('  Muestras (primeros ' + samples.length + ' chunks):'));
+      for (const p of samples) {
+        const path = p.payload?.filePath || '(sin filePath)';
+        const section = p.payload?.sectionTitle ? '  § ' + p.payload.sectionTitle : '';
+        const updatedAt = p.payload?.updatedAt ? '  [' + p.payload.updatedAt.slice(0, 19).replace('T', ' ') + ']' : '';
+        console.log('    · ' + cyan(path) + dim(section) + dim(updatedAt));
+      }
+    }
+  }
+
+  // ── 4. Sanity de uso por agentes (en este proyecto) ───────────────
+  console.log('');
+  console.log('  ' + bold('Sanity de agentes — uso de Memory en tareas'));
+  const usage = await checkTaskMemoryUsage();
+
+  if (usage.total === 0) {
+    console.log('  ' + dim('  (sin tareas en vault/memory/tasks/ todavía)'));
+  } else {
+    console.log('  ' + dim('  Tareas totales:                          ') + cyan(usage.total));
+    console.log('  ' + dim('  Cerradas (conclusion.md presente):       ') + cyan(usage.closed + '/' + usage.total));
+    console.log('  ' + dim('  Con sección "Previous insights":         ')
+      + (usage.withPreviousInsights > 0
+          ? green(usage.withPreviousInsights + '/' + usage.total + ' ✓ researcher usó el engine')
+          : yellow('0 — researcher con prompt viejo o engine inaccesible')));
+
+    // Última tarea cerrada
+    const closed = usage.tasks.filter(t => t.hasConclusion);
+    if (closed.length > 0) {
+      const last = closed[closed.length - 1];
+      console.log('');
+      console.log('  ' + dim('  Última tarea cerrada: ') + cyan(last.slug));
+      console.log('  ' + dim('    research.md tiene Previous insights: ')
+        + (last.hasPreviousInsights
+            ? green('✓')
+            : yellow('✗ — researcher no consultó el engine en esta tarea')));
+    }
+  }
+
+  // ── 5. Cómo probar manualmente ───────────────────────────────────
+  console.log('');
+  console.log('  ' + bold('Cómo probar end-to-end manualmente'));
+  console.log('  ' + dim('  Query semántica desde terminal:'));
+  console.log('    ' + cyan('node vault/memory/.engine/search.mjs "<tu query>"'));
+  console.log('  ' + dim('  Activity en vivo (logs del container):'));
+  console.log('    ' + cyan('docker logs -f phobos-qdrant'));
+  console.log('  ' + dim('  Buscás líneas "POST /collections/.../points/search" o "/points" (upsert).'));
+
+  console.log('');
+  await pressEnterToContinue();
 }
 
 async function actionMemoryReindexForce() {
