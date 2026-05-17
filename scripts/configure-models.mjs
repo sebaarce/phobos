@@ -449,6 +449,57 @@ async function rmrf(path) {
   }
 }
 
+// Copia recursiva multiplataforma (Node 16.7+ tiene fs.cp con {recursive:true})
+async function copyDirRecursive(src, dst) {
+  const { cp } = await import('node:fs/promises');
+  await cp(src, dst, { recursive: true });
+}
+
+// Tamaño total de un directorio en bytes. Si no existe, devuelve 0.
+async function getDirSize(dirPath) {
+  if (!await fileExists(dirPath)) return 0;
+  const { stat } = await import('node:fs/promises');
+  let total = 0;
+  async function walk(p) {
+    try {
+      const s = await stat(p);
+      if (s.isDirectory()) {
+        const entries = await readdir(p);
+        for (const entry of entries) {
+          await walk(join(p, entry));
+        }
+      } else if (s.isFile()) {
+        total += s.size;
+      }
+    } catch {}
+  }
+  await walk(dirPath);
+  return total;
+}
+
+// Formato humano (B, KB, MB, GB).
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+// Lee la lista de collections de Qdrant via REST. Vacío si no se puede.
+async function listQdrantCollections() {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const r = await fetch(`${QDRANT_URL}/collections`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!r.ok) return [];
+    const j = await r.json();
+    return j?.result?.collections?.map(c => c.name) || [];
+  } catch {
+    return [];
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Utilidades
 // ═══════════════════════════════════════════════════════════════════
@@ -557,6 +608,7 @@ function printMemoryBanner() {
   for (const l of lines) console.log('  ' + orange(l));
   console.log('');
   console.log('  ' + dim('Memory — RAG sobre el vault con @xenova/transformers + Qdrant'));
+  console.log('  ' + dim('Dashboard Qdrant: ') + cyan('http://localhost:6333/dashboard'));
   console.log('');
 }
 
@@ -2330,6 +2382,271 @@ async function appendGitignoreSnippet() {
   console.log(dim('  · .gitignore actualizado con .index-state.json'));
 }
 
+// Router de la opción "Memory (RAG)" del menú principal.
+// - Si Memory NO está instalada → corre el wizard de instalación.
+// - Si Memory SÍ está instalada → muestra un submenú con: Re-indexar,
+//   Reset Qdrant, Re-instalar engine, Volver.
+async function actionMemory() {
+  const installed = await fileExists('vault/memory/.engine/config.json');
+  if (!installed) {
+    return actionInstallMemory();
+  }
+
+  while (true) {
+    clearScreen();
+    printMemoryBanner();
+
+    const qdrant = await detectQdrantStatus();
+    const collectionName = projectCollectionSlug();
+    const collections = qdrant.healthy ? await listQdrantCollections() : [];
+
+    panel('Memory (RAG) — submenú', [
+      'Memory ya está instalada en este proyecto.',
+      'Collection de este proyecto: ' + cyan(collectionName),
+      'Qdrant global: ' + (qdrant.healthy
+        ? green('✓ corriendo')
+        : (qdrant.containerRunning ? yellow('⚠ arrancando') : yellow('no corriendo'))),
+      qdrant.healthy ? `Collections en Qdrant: ${collections.length} ${dim('(' + (collections.slice(0,3).join(', ') || 'ninguna') + (collections.length > 3 ? ', …' : '') + ')')}` : '',
+    ].filter(Boolean));
+
+    let choice;
+    try {
+      choice = await tuiSelect(
+        '\n¿Qué querés hacer?',
+        [
+          'Re-indexar este proyecto (--force, vuelve a vectorizar todo)',
+          'Reset Qdrant global ' + dim('(destructivo · borra storage de TODOS los proyectos · backup opcional)'),
+          'Re-instalar engine en este proyecto ' + dim('(sobreescribe vault/memory/.engine/ con templates frescos)'),
+          dim('← Volver al menú principal'),
+        ],
+        0,
+      );
+    } catch (err) {
+      if (err === WIZARD_CANCELLED) return; // Esc en submenú = volver al menú principal
+      throw err;
+    }
+
+    if (choice.index === 3) return;
+    if (choice.index === 0) {
+      await runAction(() => actionMemoryReindexForce());
+    } else if (choice.index === 1) {
+      await runAction(() => actionResetQdrant());
+    } else if (choice.index === 2) {
+      await runAction(() => actionInstallMemory());
+    }
+  }
+}
+
+async function actionMemoryReindexForce() {
+  const history = [];
+  renderWizardStep(printMemoryBanner, history, '[1/1] Re-indexar este proyecto (--force)');
+
+  const qdrant = await detectQdrantStatus();
+  if (!qdrant.healthy) {
+    console.log(yellow('  ⚠ Qdrant no está corriendo. Levantalo y reintentá:'));
+    console.log('    ' + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} up -d`));
+    await pressEnterToContinue();
+    return;
+  }
+
+  rl.pause();
+  const code = await runChild(
+    'node',
+    ['vault/memory/.engine/index-vault.mjs', '--force'],
+    'index-vault.mjs --force',
+  );
+  history.push({
+    label: 'Re-indexación',
+    value: code === 0 ? 'OK — todos los archivos re-vectorizados' : `Falló (exit ${code})`,
+  });
+
+  renderWizardStep(printMemoryBanner, history, '');
+  console.log(code === 0 ? green('  ✓ Re-index completo.') : red('  ✗ Re-index falló.'));
+  await pressEnterToContinue();
+}
+
+async function actionResetQdrant() {
+  const history = [];
+
+  // ─── Step 1/5: Leer estado actual y mostrar warning ──────────────────
+  renderWizardStep(printMemoryBanner, history, '[1/5] Reset Qdrant — leer estado y advertir');
+
+  const status = await detectQdrantStatus();
+  const storageDir = join(PHOBOS_HOME, 'qdrant-storage');
+  const storageSize = await getDirSize(storageDir);
+  const collections = status.healthy ? await listQdrantCollections() : [];
+
+  console.log('  ' + dim('Container status: ') + (
+    status.healthy ? green('✓ corriendo')
+    : status.containerRunning ? yellow('⚠ arrancando')
+    : dim('no corriendo')
+  ));
+  console.log('  ' + dim('Storage path:     ') + cyan(storageDir));
+  console.log('  ' + dim('Storage size:     ') + cyan(formatBytes(storageSize)));
+  console.log('  ' + dim('Collections:      ') + (
+    collections.length > 0
+      ? cyan(collections.join(', '))
+      : dim('(ninguna detectada o Qdrant no responde)')
+  ));
+
+  console.log('');
+  console.log('  ' + bold(yellow('⚠  ATENCIÓN — operación destructiva')));
+  console.log('');
+  console.log('  Si confirmás, este wizard va a:');
+  console.log('    ' + dim('1.') + ' Bajar y remover el contenedor ' + cyan(QDRANT_CONTAINER) + '.');
+  console.log('    ' + dim('2.') + ' Opcionalmente hacer backup del storage actual.');
+  console.log('    ' + dim('3.') + ' Borrar ' + cyan(storageDir) + dim(' (vectores de ') + bold('TODOS') + dim(' los proyectos con Memory en esta máquina).'));
+  console.log('    ' + dim('4.') + ' Borrar ' + cyan(QDRANT_COMPOSE_GLOBAL) + dim(' y regenerar desde template fresco.'));
+  console.log('    ' + dim('5.') + ' Levantar Qdrant limpio.');
+  console.log('    ' + dim('6.') + ' Re-indexar el vault de ' + bold('ESTE') + ' proyecto desde cero.');
+  console.log('');
+  console.log('  ' + yellow('NOTA: '));
+  console.log('  ' + dim('  Si tenés OTROS proyectos con Phobos en esta máquina, sus vectores también se borran.'));
+  console.log('  ' + dim('  Los archivos del engine (vault/memory/.engine/) de esos proyectos no se tocan,'));
+  console.log('  ' + dim('  pero cada proyecto tendrá que correr ') + cyan('/reindex-memory') + dim(' para volver a aparecer en Qdrant.'));
+
+  const confirm = await tuiYesNo('\n¿Continuar con el reset?', false);
+  if (!confirm) {
+    history.push({ label: 'Reset', value: 'Cancelado por el usuario' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log('  ' + dim('⊘ Reset cancelado. Nada se modificó.'));
+    await pressEnterToContinue();
+    return;
+  }
+  history.push({
+    label: 'Estado previo',
+    value: `${collections.length} collections, ${formatBytes(storageSize)} en storage`,
+  });
+
+  // ─── Step 2/5: Backup opcional ──────────────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[2/5] Backup opcional del storage actual');
+
+  let backupDone = false;
+  let backupPath = '';
+
+  if (storageSize > 0) {
+    const wantBackup = await tuiYesNo(
+      `¿Hacer backup de ${cyan(formatBytes(storageSize))} antes de borrar?`,
+      true,
+    );
+    if (wantBackup) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      backupPath = join(PHOBOS_HOME, `qdrant-storage-backup-${ts}`);
+
+      // Antes de copiar, bajar Qdrant para evitar archivos en uso
+      console.log(dim('\n  Bajando Qdrant para evitar archivos en uso...'));
+      rl.pause();
+      await runChild('docker', ['compose', '-f', QDRANT_COMPOSE_GLOBAL, 'down'], 'docker compose down');
+
+      console.log(dim('  Copiando ' + storageDir + ' → ' + backupPath));
+      console.log(dim('  (esto puede tardar según el tamaño...)'));
+
+      try {
+        await copyDirRecursive(storageDir, backupPath);
+        backupDone = true;
+        console.log(green('  ✓ Backup completado.'));
+      } catch (err) {
+        console.log(yellow('  ⚠ Backup falló: ' + (err.message || err)));
+        const continueWithoutBackup = await tuiYesNo('¿Continuar igual con el reset (sin backup)?', false);
+        if (!continueWithoutBackup) {
+          history.push({ label: 'Backup', value: 'Falló — wizard abortado para no perder datos' });
+          renderWizardStep(printMemoryBanner, history, '');
+          console.log(yellow('  Reset abortado. Datos intactos.'));
+          await pressEnterToContinue();
+          return;
+        }
+      }
+    }
+  } else {
+    console.log(dim('  Storage vacío o inexistente — no hay nada que respaldar.'));
+  }
+  history.push({
+    label: 'Backup',
+    value: backupDone
+      ? 'Guardado en ' + basename(backupPath)
+      : (storageSize === 0 ? 'No aplica (storage vacío)' : 'Saltado por el usuario'),
+  });
+
+  // ─── Step 3/5: Bajar + remover contenedor ───────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[3/5] Bajar y remover contenedor');
+
+  rl.pause();
+  await runChild('docker', ['compose', '-f', QDRANT_COMPOSE_GLOBAL, 'down'], 'docker compose down');
+  // Force remove por si quedó orfanado del compose viejo
+  await runChild('docker', ['rm', '-f', QDRANT_CONTAINER], 'docker rm phobos-qdrant');
+  history.push({ label: 'Container', value: 'bajado y eliminado' });
+
+  // ─── Step 4/5: Borrar storage + compose ─────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '[4/5] Borrar storage y compose viejos');
+
+  if (await fileExists(storageDir)) {
+    await rmrf(storageDir);
+    console.log(dim('  · ') + cyan(storageDir) + dim(' borrado'));
+  }
+  if (await fileExists(QDRANT_COMPOSE_GLOBAL)) {
+    const { rm } = await import('node:fs/promises');
+    await rm(QDRANT_COMPOSE_GLOBAL, { force: true });
+    console.log(dim('  · ') + cyan(QDRANT_COMPOSE_GLOBAL) + dim(' borrado'));
+  }
+  history.push({ label: 'Limpieza', value: 'storage + compose eliminados' });
+
+  // ─── Step 5/5: Regenerar, levantar, re-indexar ──────────────────────
+  renderWizardStep(printMemoryBanner, history, '[5/5] Regenerar Qdrant limpio y re-indexar este proyecto');
+
+  const homeResult = await ensurePhobosHome();
+  console.log('  ' + dim('docker-compose.qdrant.yml regenerado desde template ') + (homeResult.created ? green('✓') : dim('(ya existía)')));
+
+  rl.pause();
+  const upCode = await runChild(
+    'docker',
+    ['compose', '-f', QDRANT_COMPOSE_GLOBAL, 'up', '-d', '--force-recreate'],
+    'docker compose up -d --force-recreate',
+  );
+  if (upCode !== 0) {
+    history.push({ label: 'Levantar Qdrant', value: 'Falló — revisá Docker' });
+    renderWizardStep(printMemoryBanner, history, '');
+    console.log(red('  ✗ Qdrant no arrancó. Revisá Docker Desktop esté corriendo.'));
+    if (backupDone) {
+      console.log(dim('  Tu backup está intacto en: ') + cyan(backupPath));
+      console.log(dim('  Para restaurarlo manualmente:'));
+      console.log('    ' + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} down`));
+      console.log('    ' + cyan(`mv ${backupPath} ${storageDir}`));
+      console.log('    ' + cyan(`docker compose -f ${QDRANT_COMPOSE_GLOBAL} up -d`));
+    }
+    await pressEnterToContinue();
+    return;
+  }
+  history.push({ label: 'Levantar Qdrant', value: 'OK · limpio · sin auth' });
+
+  console.log(dim('\n  Esperando 5s a que Qdrant esté listo...'));
+  await new Promise(r => setTimeout(r, 5000));
+
+  rl.pause();
+  const indexCode = await runChild(
+    'node',
+    ['vault/memory/.engine/index-vault.mjs', '--force'],
+    'index-vault.mjs --force',
+  );
+  history.push({
+    label: 'Re-indexación',
+    value: indexCode === 0
+      ? `Vault del proyecto re-indexado en collection ${projectCollectionSlug()}`
+      : `Falló (exit ${indexCode}) — corré manualmente con node vault/memory/.engine/index-vault.mjs --force`,
+  });
+
+  // ─── Pantalla final ─────────────────────────────────────────────────
+  renderWizardStep(printMemoryBanner, history, '');
+  console.log('  ' + green('Reset completado.'));
+  console.log('');
+  console.log('  ' + dim('Tu collection en Qdrant: ') + cyan(projectCollectionSlug()));
+  if (backupDone) {
+    console.log('  ' + dim('Backup del storage anterior: ') + cyan(backupPath));
+    console.log('  ' + dim('  → si querés restaurarlo en el futuro: parar Qdrant, mv backup encima de qdrant-storage/, levantar.'));
+  }
+  console.log('  ' + dim('Otros proyectos con Memory: corré ') + cyan('/reindex-memory') + dim(' en cada uno para que vuelvan a aparecer en Qdrant.'));
+  await pressEnterToContinue();
+}
+
 async function actionInstallMemory() {
   const history = [];
 
@@ -2372,7 +2689,6 @@ async function actionInstallMemory() {
     : qdrant.containerRunning ? yellow('⚠ contenedor up pero sin responder a /healthz aún')
     : dim('— no está corriendo (se levantará en el paso 5)')
   ));
-  console.log('  ' + dim('Dashboard:     ') + cyan(QDRANT_URL + '/dashboard'));
   console.log('  ' + dim('Package manager: ') + cyan(pm));
   console.log('  ' + dim('Collection name: ') + cyan(collectionName));
   console.log('  ' + dim('Global compose: ') + cyan(QDRANT_COMPOSE_GLOBAL));
@@ -2659,7 +2975,7 @@ async function runMainMenu(agentDir) {
       : 'Actualizar agentes      ' + dim('(al día)');
 
     const memoryLabel = state.memoryInstalled
-      ? 'Memory (RAG)            ' + dim('(instalado · re-indexar / reconfigurar)')
+      ? 'Memory (RAG)            ' + dim('(instalado · reindex / reset / re-instalar)')
       : 'Memory (RAG)            ' + dim('(instalar engine de búsqueda semántica)');
 
     // En el menú principal Esc no tiene sentido (no hay "menú padre"),
@@ -2690,7 +3006,7 @@ async function runMainMenu(agentDir) {
     } else if (index === 2) {
       await runAction(() => actionInstallTools());
     } else if (index === 3) {
-      await runAction(() => actionInstallMemory());
+      await runAction(() => actionMemory());
     } else if (index === 4) {
       clearScreen();
       showHappyGoodbye();

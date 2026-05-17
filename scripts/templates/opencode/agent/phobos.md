@@ -25,8 +25,15 @@ permission:
     "git add*": deny
     "git commit*": deny
     "git push*": deny
+    # Memory engine — scripts y healthchecks (bash y PowerShell)
     "node vault/memory/.engine/*": allow
+    "node.exe vault*": allow
+    "Test-Path *": allow
+    "ls vault/memory/.engine/*": allow
     "curl -sf http://localhost:6333/*": allow
+    "curl -sf http://localhost*": allow
+    "Invoke-WebRequest -Uri http://localhost*": allow
+    "Invoke-WebRequest*localhost*": allow
   task:
     "*": deny
     researcher: allow

@@ -3,58 +3,56 @@ description: Re-indexa la memoria semántica del vault en Qdrant. Incremental po
 agent: phobos
 ---
 
-El usuario invocó `/reindex-memory` — esto es un comando administrativo, NO una tarea SDD. **No abras el pipeline normal** (no delegues a researcher/planner/programmer/tester). Tu rol acá es ejecutar el script de indexación y traducir el output al chat en español argentino.
+El usuario invocó `/reindex-memory` — comando administrativo, NO una tarea SDD. Tu único trabajo es: ejecutar el script de indexación, leer su output, traducir al chat en español argentino.
 
 ## Argumentos del usuario
 
 `$ARGUMENTS`
 
 Interpretación:
+- Vacío o cualquier valor que no sea reconocido → **incremental** (default, rápido).
+- `full`, `force`, `--force` → **reindex completo** (más lento).
 
-- Vacío o cualquier valor que no sea reconocido → **incremental** (default, rápido — solo re-indexa archivos cuyo hash SHA-1 cambió).
-- `full`, `force`, `--force` → **reindex completo** (más lento, re-vectoriza todo el vault).
+## Comando a ejecutar
 
-## Pasos a ejecutar
-
-### Paso 1 — Verificar que la memoria esté instalada
-
-Ejecutá:
+Si los argumentos contienen `full`, `force` o `--force`, ejecutá:
 
 ```bash
-ls vault/memory/.engine/index-vault.mjs
+node vault/memory/.engine/index-vault.mjs --force
 ```
 
-Si el archivo NO existe, respondé al usuario (en español) algo equivalente a:
-
-> La memoria semántica no está instalada en este proyecto todavía. Para instalarla, salí de OpenCode y corré:
->
-> ```bash
-> npx github:sebaarce/phobos
-> ```
->
-> En el menú principal elegí **Memory (RAG)**. El wizard instala dependencias, levanta Qdrant en Docker y hace la primera indexación.
-
-Y terminá ahí — no avances al paso 2.
-
-### Paso 2 — Verificar que Qdrant esté corriendo
-
-Probá un health check rápido. **Detectá el shell antes**: si estás en Windows PowerShell, usá `Invoke-WebRequest`; en bash/zsh usá `curl`.
-
-**Bash / zsh / Git Bash**:
+Si no, ejecutá:
 
 ```bash
-curl -sf http://localhost:6333/healthz -o /dev/null && echo "qdrant-ok" || echo "qdrant-down"
+node vault/memory/.engine/index-vault.mjs --incremental
 ```
 
-**Windows PowerShell**:
+**Ejecutalo directamente.** NO hagas healthchecks previos, NO verifiques existencia de archivos — el script ya valida todo internamente y reporta errores claros con mensajes específicos en el output.
 
-```powershell
-try { Invoke-WebRequest -Uri "http://localhost:6333/healthz" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop | Out-Null; "qdrant-ok" } catch { "qdrant-down" }
-```
+## Cómo reportar el resultado
 
-Si la salida es `qdrant-down`, decile al usuario:
+Leé el stdout/stderr del script. Casos:
 
-> Qdrant no está corriendo. Levantalo con:
+### Caso 1 — Exit 0, terminó OK
+
+Output incluye `[memory] done in Xs: A indexed, B unchanged, C chunks total`.
+
+Reportá en español argentino (voseo), ≤4 líneas:
+
+> ✅ Reindex terminado en X s.
+> Archivos: A indexados (con cambios), B sin cambios.
+> Total en Qdrant: C chunks en la collection del proyecto.
+
+Si fue full reindex (`--force`), agregá:
+> Tip: la próxima vez podés usar `/reindex-memory` sin args — incremental es mucho más rápido.
+
+### Caso 2 — `qdrant unreachable`
+
+Output incluye `[memory] qdrant unreachable at http://localhost:6333`.
+
+Reportá:
+
+> ⚠️ Qdrant no está corriendo. Levantalo con:
 >
 > ```bash
 > docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d
@@ -62,89 +60,53 @@ Si la salida es `qdrant-down`, decile al usuario:
 >
 > Esperá 5 segundos y volvé a correr `/reindex-memory`.
 
-Y terminá ahí — no intentes indexar contra un Qdrant caído.
+### Caso 3 — `Unauthorized` (bug del template viejo)
 
-### Paso 3 — Ejecutar el reindex
+Output incluye `[memory] fatal: Unauthorized`, o `401`, o "api key".
 
-Si `$ARGUMENTS` contiene `full`, `force` o `--force`:
+Reportá:
 
-```bash
-node vault/memory/.engine/index-vault.mjs --force
-```
-
-Si no:
-
-```bash
-node vault/memory/.engine/index-vault.mjs --incremental
-```
-
-### Paso 4 — Reportar al usuario
-
-Leé el stdout del script. Va a tener líneas como:
-
-```
-[memory] qdrant: http://localhost:6333
-[memory] model: Xenova/multilingual-e5-small (384d)
-[memory] indexing N file(s) (incremental)
-  ✓ vault/memory/insights/foo.md → 3 chunk(s)
-  · vault/memory/wiki/bar.md (unchanged)
-  ...
-[memory] done in 4.2s: X indexed, Y unchanged, Z chunks total
-```
-
-Reportá al usuario en ≤5 líneas (español, voseo):
-
-- Cantidad de archivos indexados (cambiados) y sin cambios.
-- Total de chunks en Qdrant.
-- Tiempo total.
-- Si fue full reindex, recordale que para próximas veces basta con `/reindex-memory` (sin args) y es mucho más rápido.
-
-Ejemplo de reporte exitoso:
-
-> ✅ Reindex incremental terminado en 4.2s.
-> Archivos: 2 indexados (con cambios), 18 sin cambios.
-> Total en Qdrant: 47 chunks en la collection del proyecto.
-
-Ejemplo de error si el script salió con código != 0:
-
-> ⚠️ El reindex falló con código N. Output relevante:
-> `<últimas 3-5 líneas del stderr>`
-> Probables causas: Qdrant cayó durante el proceso, espacio en disco, o un archivo del vault corrupto.
-
-### Caso especial — `Unauthorized` / 401 / "API key"
-
-Si el script imprime `[memory] fatal: Unauthorized` (o cualquier error con `401` o "api key"), Qdrant está corriendo pero está en modo auth y el cliente JS no le pasa la API key.
-
-**No es que necesites una API key** — el setup de Phobos es **sin auth**. La causa es que tu `~/.phobos/docker-compose.qdrant.yml` tiene una línea vieja del template:
-
-```yaml
-environment:
-  QDRANT__SERVICE__API_KEY: ""   # ← esta línea habilita auth con key vacía
-```
-
-Decile al usuario, en español, algo equivalente a:
-
-> ⚠️ Qdrant está corriendo pero rechaza con `Unauthorized`. Es un bug del template viejo. Para arreglarlo:
+> ⚠️ Qdrant está corriendo pero rechaza con `Unauthorized`. Es un bug de una versión vieja del template del docker-compose que activaba auth con key vacía.
 >
-> 1. Bajá Qdrant:
->    ```bash
->    docker compose -f ~/.phobos/docker-compose.qdrant.yml down
->    ```
-> 2. Borrá el compose viejo (NO el storage, no perdés data):
->    ```bash
->    rm ~/.phobos/docker-compose.qdrant.yml
->    ```
-> 3. Re-corré el wizard de Phobos:
->    ```bash
->    npx github:sebaarce/phobos
->    ```
->    → Menú principal → "Memory (RAG)" → el step 5 detecta que falta el compose y lo regenera con la versión nueva (sin la línea problemática). Levanta Qdrant. Indexa.
+> Para arreglarlo, salí de OpenCode y corré:
 >
-> Alternativa rápida (si no querés correr el wizard): editá `~/.phobos/docker-compose.qdrant.yml` y BORRÁ la línea `QDRANT__SERVICE__API_KEY: ""`. Después `docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d --force-recreate`.
+> ```bash
+> docker compose -f ~/.phobos/docker-compose.qdrant.yml down
+> rm ~/.phobos/docker-compose.qdrant.yml
+> npx github:sebaarce/phobos
+> ```
+>
+> En el wizard elegí **Memory (RAG)** — el step 5 va a detectar que falta el compose y lo regenera con la versión nueva (sin la línea rota). Después volvés a OpenCode y `/reindex-memory` va a andar.
+
+### Caso 4 — Archivo del engine no existe
+
+Output incluye `Cannot find module` o `ENOENT` sobre `vault/memory/.engine/`.
+
+Reportá:
+
+> ⚠️ La memoria semántica no está instalada en este proyecto. Salí de OpenCode y corré:
+>
+> ```bash
+> npx github:sebaarce/phobos
+> ```
+>
+> Elegí **Memory (RAG)** en el menú principal. El wizard instala dependencias, levanta Qdrant y hace la primera indexación.
+
+### Caso 5 — Otro error / exit code != 0
+
+Reportá las últimas 3-5 líneas del stderr:
+
+> ⚠️ El reindex falló (exit N). Output:
+> ```
+> <últimas líneas del stderr>
+> ```
+>
+> Posibles causas: archivo corrupto en `vault/memory/`, error de red al descargar el modelo Xenova, falta de RAM.
 
 ## Lo que NO hacés en este comando
 
-- No abrís ninguna sesión hija (Task) — esto es directo.
-- No leés ni modificás archivos del vault — el script lo hace solo.
-- No interpretás el contenido del vault — solo reportás métricas.
-- No transcribís output crudo de varias líneas al chat — resumí.
+- No abrís sesiones hijas (Task) — esto es directo.
+- No verificás existencia de archivos antes — el script lo hace.
+- No hacés healthcheck de Qdrant antes — el script lo hace.
+- No leés ni modificás archivos del vault — el script lo hace.
+- No transcribís más de 5 líneas del output crudo al chat — resumí.
