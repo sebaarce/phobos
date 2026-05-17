@@ -600,6 +600,7 @@ async function checkTaskMemoryUsage() {
     const hasResearch = await fileExists(researchPath);
     let hasPreviousInsights = false;
     let closedAt = null;
+    let researchAt = null;
 
     if (hasResearch) {
       try {
@@ -610,6 +611,10 @@ async function checkTaskMemoryUsage() {
           hasPreviousInsights = /\[\[[^\]]+\]\]/.test(head) || /similarity\s+[\d.]+/i.test(head);
         }
       } catch {}
+      try {
+        const s = await stat(researchPath);
+        researchAt = s.mtime;
+      } catch {}
     }
     if (hasConclusion) {
       try {
@@ -618,7 +623,7 @@ async function checkTaskMemoryUsage() {
       } catch {}
     }
 
-    out.tasks.push({ slug, hasConclusion, hasResearch, hasPreviousInsights, closedAt });
+    out.tasks.push({ slug, hasConclusion, hasResearch, hasPreviousInsights, closedAt, researchAt });
     out.total++;
     if (hasConclusion) out.closed++;
     if (hasPreviousInsights) out.withPreviousInsights++;
@@ -2650,33 +2655,47 @@ async function actionInspectQdrant() {
   if (usage.total === 0) {
     console.log('  ' + dim('  (sin tareas en vault/memory/tasks/ todavía)'));
   } else {
-    // Clasificar tareas cerradas en pre/post-instalación de Memory
+    // Clasificación correcta: usamos el mtime de RESEARCH.md (no de conclusion.md)
+    // para determinar si el researcher corrió pre o post-Memory. El research.md
+    // no se regenera al cerrar la tarea — si fue escrito antes del install, es
+    // histórico aunque el cierre sea posterior.
     const closedTasks = usage.tasks.filter(t => t.hasConclusion);
-    let historical = [];
-    let postInstall = [];
+    const historicalResearch = [];        // research.md generado antes del install
+    const postInstall = [];                // research.md generado después del install
+    const closedButPreResearch = [];      // cerradas post-install pero con research pre-install
     if (installedAt) {
       for (const t of closedTasks) {
-        if (t.closedAt && t.closedAt < installedAt) historical.push(t);
-        else postInstall.push(t);
+        if (!t.researchAt) {
+          // No hay research.md → no aplica al sanity check
+          historicalResearch.push(t);
+        } else if (t.researchAt < installedAt) {
+          historicalResearch.push(t);
+          if (t.closedAt && t.closedAt >= installedAt) {
+            closedButPreResearch.push(t);
+          }
+        } else {
+          postInstall.push(t);
+        }
       }
     } else {
-      postInstall = closedTasks; // sin fecha de install, asumimos todas son post
+      postInstall.push(...closedTasks);
     }
     const postWithInsights = postInstall.filter(t => t.hasPreviousInsights).length;
 
     console.log('');
-    console.log('  ' + dim('  Tareas totales:                    ') + cyan(usage.total));
-    console.log('  ' + dim('  Cerradas:                          ') + cyan(closedTasks.length + '/' + usage.total));
-    if (historical.length > 0) {
-      console.log('  ' + dim('  Pre-Memory (no aplica):            ') + dim(historical.length + ' tarea(s) históricas, no van a tener Previous insights'));
+    console.log('  ' + dim('  Tareas totales:                            ') + cyan(usage.total));
+    console.log('  ' + dim('  Cerradas:                                  ') + cyan(closedTasks.length + '/' + usage.total));
+    if (historicalResearch.length > 0) {
+      console.log('  ' + dim('  Pre-Memory (research generado antes):      ')
+        + dim(historicalResearch.length + ' tarea(s) — no aplican al flujo RAG'));
     }
-    console.log('  ' + dim('  Post-Memory:                       ') + cyan(postInstall.length));
+    console.log('  ' + dim('  Post-Memory (research generado después):   ') + cyan(postInstall.length));
     if (postInstall.length > 0) {
       const ratio = postWithInsights + '/' + postInstall.length;
       const color = postWithInsights === postInstall.length ? green
                   : postWithInsights > 0 ? yellow
                   : red;
-      console.log('  ' + dim('    Con Previous insights:           ') + color(ratio));
+      console.log('  ' + dim('    Con Previous insights:                   ') + color(ratio));
     }
 
     // Última tarea cerrada post-Memory
@@ -2684,7 +2703,7 @@ async function actionInspectQdrant() {
       const last = postInstall[postInstall.length - 1];
       console.log('');
       console.log('  ' + dim('  Última tarea cerrada post-Memory: ') + cyan(last.slug));
-      console.log('  ' + dim('    cerrada el:                      ') + cyan(fmtDate(last.closedAt)));
+      console.log('  ' + dim('    research.md generado el:         ') + cyan(fmtDate(last.researchAt)));
       console.log('  ' + dim('    Previous insights presente:      ')
         + (last.hasPreviousInsights ? green('✓') : yellow('✗')));
     }
@@ -2699,10 +2718,27 @@ async function actionInspectQdrant() {
       console.log('  ' + dim('    Solución:'));
       console.log('    ' + cyan('    npx github:sebaarce/phobos') + dim('  → "Actualizar agentes" → aplicar'));
       console.log('  ' + dim('    Después reiniciá OpenCode para que tome el prompt nuevo.'));
+    } else if (postInstall.length === 0 && closedButPreResearch.length > 0) {
+      // ESCENARIO ESPECÍFICO: tareas cerradas post-install pero research.md pre-install
+      console.log('  ' + yellow('  ⚠ Las tareas cerradas después de instalar Memory tienen su research.md'));
+      console.log('  ' + yellow('    generado ANTES del install. Esos research.md NO se regeneran al cerrar.'));
+      console.log('');
+      console.log('  ' + dim('    Detalle de la(s) tarea(s) afectada(s):'));
+      for (const t of closedButPreResearch.slice(-3)) {
+        console.log('  ' + dim('      · ') + cyan(t.slug));
+        console.log('  ' + dim('        research.md:     ') + fmtDate(t.researchAt) + dim('  (pre-Memory)'));
+        console.log('  ' + dim('        conclusion.md:   ') + fmtDate(t.closedAt) + dim('  (post-Memory)'));
+      }
+      console.log('');
+      console.log('  ' + bold('Esto es normal') + dim(' — el flujo RAG funciona desde el ') + bold('OPEN') + dim(' de una tarea.'));
+      console.log('  ' + dim('    Para validar, hacé esto:'));
+      console.log('  ' + dim('      1. Abrí una tarea ') + bold('nueva') + dim(' en Phobos (Open task, no Resume).'));
+      console.log('  ' + dim('      2. Dejá que el researcher escriba research.md desde cero.'));
+      console.log('  ' + dim('      3. Cuando termine, volvé a Inspect.'));
+      console.log('  ' + dim('      4. Verificá que "Post-Memory" suba a 1 y "Con Previous insights" sea 1/1.'));
     } else if (postInstall.length === 0) {
-      console.log('  ' + yellow('  ⚠ Sin tareas cerradas después de instalar Memory.'));
-      console.log('  ' + dim('    No hay datos para validar el flujo RAG todavía.'));
-      console.log('  ' + dim('    Probá una tarea nueva en Phobos y volvé a Inspect.'));
+      console.log('  ' + yellow('  ⚠ Sin tareas con research.md generado después de instalar Memory.'));
+      console.log('  ' + dim('    Probá abrir una tarea NUEVA y dejar que corra el pipeline completo.'));
     } else if (postWithInsights === postInstall.length) {
       console.log('  ' + green('  ✓ Todo OK. ') + dim('Researcher consulta el engine en cada tarea post-Memory.'));
     } else if (postWithInsights === 0) {
@@ -2711,7 +2747,7 @@ async function actionInspectQdrant() {
       console.log('  ' + dim('    Solución:'));
       console.log('  ' + dim('      1. Cerrar OpenCode completamente (no solo el tab).'));
       console.log('  ' + dim('      2. Volver a abrirlo.'));
-      console.log('  ' + dim('      3. Crear una tarea nueva de prueba.'));
+      console.log('  ' + dim('      3. Crear una tarea nueva de prueba (Open task, no Resume).'));
       console.log('  ' + dim('      4. Volver a Inspect Qdrant y verificar.'));
       console.log('  ' + dim('    Si persiste: el researcher puede estar fallando silenciosamente al correr'));
       console.log('  ' + dim('    search.mjs (ej: por permisos). Revisá los logs de la sesión hija.'));
