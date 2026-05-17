@@ -22,7 +22,7 @@ Decile al usuario, literalmente:
 > ```bash
 > npm run models
 > # o
-> node scripts/configure-models.mjs
+> node scripts/phobos.mjs
 > ```
 >
 > El script:

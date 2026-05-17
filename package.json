@@ -5,10 +5,11 @@
   "description": "Setup local de agentes Phobos para OpenCode. Scripts utilitarios.",
   "type": "module",
   "bin": {
-    "phobos": "./scripts/configure-models.mjs"
+    "phobos": "./scripts/phobos.mjs"
   },
   "scripts": {
-    "models": "node scripts/configure-models.mjs"
+    "phobos": "node scripts/phobos.mjs",
+    "models": "node scripts/phobos.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -82,9 +82,9 @@ Esto está implementado vía `permission.bash` con `deny` explícito en todos lo
 Para configurar modelos **sin abrir OpenCode**, hay un script standalone:
 
 ```bash
-node scripts/configure-models.mjs   # invocación directa
+node scripts/phobos.mjs   # invocación directa
 # o
-npm run models                       # vía package.json
+npm run phobos            # vía package.json
 ```
 
 Sin dependencias externas (solo Node.js ≥ 18). Hace lo mismo que `/models-wizard`:

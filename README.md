@@ -26,9 +26,12 @@ Tres piezas conectadas:
 
 1. **El sistema Phobos** — 6 agentes (`phobos`, `researcher`, `planner`, `programmer`, `tester`, `archivist`) + 2 comandos custom (`/adapt-agents`, `/models-wizard`) + vault de memoria persistente. Viven en `.opencode/` y `vault/` de cada proyecto.
 
-2. **El CLI `phobos`** — un script Node.js standalone (`scripts/configure-models.mjs`) que hace dos cosas:
+2. **El CLI `phobos`** — un script Node.js standalone (`scripts/phobos.mjs`, modularizado bajo `scripts/lib/`) que hace varias cosas:
    - **Bootstrap** del sistema Phobos en cualquier proyecto (copia los templates).
+   - **Actualización** de agentes cuando el template upstream cambió.
    - **Configuración interactiva** de modelos por agente con TUI navegable.
+   - **Instalación** de herramientas externas (autoskills, obsidian-skills, impeccable).
+   - **Memory engine (RAG)** — setup de Qdrant local + embeddings vía `@xenova/transformers`.
 
 3. **Los templates** — copia limpia de `.opencode/` y `vault/` en `scripts/templates/` que el CLI usa para bootstrappear proyectos nuevos.
 
@@ -246,10 +249,10 @@ El CLI guía todo el flujo:
 ### Alternativas de invocación
 
 ```bash
-npx phobos       # global (recomendado, tras npm link)
-phobos           # también global, sin npx
-npm run models          # desde la raíz del repo
-node scripts/configure-models.mjs   # directo
+npx phobos              # global (recomendado, tras npm link)
+phobos                  # también global, sin npx
+npm run phobos          # desde la raíz del repo
+node scripts/phobos.mjs # directo
 ```
 
 ---
@@ -408,7 +411,7 @@ rm -rf .opencode/ vault/
 Como `npm link` crea un **symlink**, cualquier cambio al script se refleja al instante en `npx phobos` desde cualquier carpeta. No hay que reinstalar.
 
 ```bash
-# Editás scripts/configure-models.mjs
+# Editás scripts/phobos.mjs (o cualquier módulo bajo scripts/lib/)
 # Probás desde otra carpeta
 cd /tmp/test
 npx phobos   # usa la última versión automáticamente
@@ -427,7 +430,9 @@ npx phobos   # detecta carpeta vacía, ofrece bootstrap
 
 ```bash
 cd <ruta>/opencode
-node --check scripts/configure-models.mjs
+node --check scripts/phobos.mjs
+# Y todos los módulos:
+for f in scripts/phobos.mjs scripts/lib/*.mjs scripts/lib/memory/*.mjs; do node --check "$f" || echo "FAIL: $f"; done
 ```
 
 ### Actualizar templates con el estado actual
@@ -448,10 +453,18 @@ cp vault/SCHEMA.md vault/TASKS.md vault/README.md scripts/templates/vault/
 ```
 opencode/
 ├── README.md             # este archivo
-├── package.json          # bin: phobos → scripts/configure-models.mjs
+├── package.json          # bin: phobos → scripts/phobos.mjs
 ├── .gitignore
+├── docker-compose.qdrant.yml  # para levantar Qdrant local (dev del repo)
 ├── scripts/
-│   ├── configure-models.mjs   # el CLI (~700 líneas, sin deps externas)
+│   ├── phobos.mjs             # entry del CLI (~200 líneas)
+│   ├── lib/                   # módulos del CLI (~4000 líneas distribuidas)
+│   │   ├── colors.mjs, runtime.mjs, exit.mjs
+│   │   ├── tui.mjs, banners.mjs, fs-utils.mjs, child.mjs
+│   │   ├── bootstrap.mjs, update.mjs, models.mjs, tools.mjs
+│   │   └── memory/            # subsistema RAG (Qdrant + xenova/transformers)
+│   │       ├── engine.mjs, deps.mjs, collection.mjs
+│   │       ├── inspect.mjs, install.mjs, reset.mjs, index.mjs
 │   └── templates/             # copia de .opencode/ y vault/ para bootstrap
 │       ├── .gitignore
 │       ├── opencode/
