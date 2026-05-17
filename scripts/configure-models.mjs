@@ -1524,12 +1524,13 @@ function showAgentDiff(file) {
   }
 }
 
-async function runUpdateWizard(updates) {
-  console.log('\n' + dim('  Revisión de actualizaciones — agente por agente.'));
-
+// runUpdateWizard — Step 4 cuando se eligió "Revisar uno por uno".
+// Recibe `history` mutable: cada archivo procesado agrega una línea al historial
+// superior y limpia la pantalla en el siguiente archivo.
+async function runUpdateWizard(history, updates) {
   for (let i = 0; i < updates.outdated.length; i++) {
     const f = updates.outdated[i];
-    const label = `[${i + 1}/${updates.outdated.length}] ${basename(f.dst)}`;
+    const fileName = basename(f.dst);
 
     // Leer modelos para mostrar la diferencia si la hay
     const localContent = await readFile(f.localPath, 'utf-8');
@@ -1539,6 +1540,12 @@ async function runUpdateWizard(updates) {
     const modelsDiffer = f.ignoreModel && templateModel && localModel !== templateModel;
 
     while (true) {
+      renderWizardStep(
+        printUpdateBanner,
+        history,
+        `[4/4] Aplicar · archivo ${i + 1}/${updates.outdated.length}: ${fileName}`,
+      );
+
       const options = [
         `Actualizar y preservar mi modelo  ${dim('(' + localModel + ')')}`,
       ];
@@ -1549,12 +1556,11 @@ async function runUpdateWizard(updates) {
       options.push('Saltar este');
 
       const { index } = await tuiSelect(
-        '\n' + bold(label) + dim('  — tiene cambios respecto al template'),
+        '\n' + bold(fileName) + dim('  — tiene cambios respecto al template'),
         options,
         0,
       );
 
-      // Resolver acción según índices dinámicos
       const idxPreserve = 0;
       const idxAcceptTemplate = modelsDiffer ? 1 : -1;
       const idxDiff = modelsDiffer ? 2 : 1;
@@ -1562,35 +1568,71 @@ async function runUpdateWizard(updates) {
 
       if (index === idxPreserve) {
         await applyUpdate(f, { preserveLocalModel: true });
-        console.log(green('  ✓ ' + basename(f.dst) + ' actualizado.') + dim(' (modelo preservado: ' + localModel + ')'));
+        history.push({
+          label: `  · ${fileName}`,
+          value: `actualizado, modelo preservado (${localModel})`,
+        });
         break;
       } else if (index === idxAcceptTemplate) {
         await applyUpdate(f, { preserveLocalModel: false });
-        console.log(green('  ✓ ' + basename(f.dst) + ' actualizado.') + dim(' (modelo cambiado a: ' + templateModel + ')'));
+        history.push({
+          label: `  · ${fileName}`,
+          value: `actualizado, modelo del template (${templateModel})`,
+        });
         break;
       } else if (index === idxDiff) {
+        // Mostrar diff inline y volver a preguntar (no se agrega al history)
         showAgentDiff(f);
-        // loop back para volver a preguntar
+        console.log('');
+        console.log(dim('  Presioná Enter para volver a la pregunta...'));
+        await new Promise((resolve) => {
+          const onKey = (str, key) => {
+            if (key && (key.name === 'return' || key.name === 'space' || key.name === 'escape')) {
+              stdin.removeListener('keypress', onKey);
+              try { stdin.setRawMode(false); } catch {}
+              resolve();
+            }
+          };
+          try { stdin.setRawMode(true); } catch {}
+          stdin.resume();
+          stdin.on('keypress', onKey);
+        });
+        // loop back: el siguiente iteración del while re-renderiza desde cero
       } else if (index === idxSkip) {
-        console.log(dim('  ⊘ ' + basename(f.dst) + ' sin tocar.'));
+        history.push({
+          label: `  · ${fileName}`,
+          value: 'saltado, sin cambios',
+        });
         break;
       }
     }
   }
 
+  // Archivos faltantes — preguntar al final
   if (updates.missing.length > 0) {
-    console.log('');
+    renderWizardStep(
+      printUpdateBanner,
+      history,
+      `[4/4] Aplicar · archivos faltantes (${updates.missing.length})`,
+    );
+
     const create = await tuiYesNo(
-      `¿Crear los ${updates.missing.length} archivos faltantes (${updates.missing.map(m => basename(m.dst)).join(', ')})?`,
+      `\n¿Crear los ${updates.missing.length} archivos faltantes (${updates.missing.map(m => basename(m.dst)).join(', ')})?`,
       true,
     );
     if (create) {
       for (const m of updates.missing) {
         await copyTemplateFile(m);
-        console.log(green('  ✓ ' + basename(m.dst) + ' creado.'));
+        history.push({
+          label: `  · ${basename(m.dst)}`,
+          value: 'creado desde template',
+        });
       }
     } else {
-      console.log(dim('  ⊘ archivos faltantes no creados.'));
+      history.push({
+        label: '  · faltantes',
+        value: `${updates.missing.length} no creado${updates.missing.length > 1 ? 's' : ''} (saltados por el usuario)`,
+      });
     }
   }
 }
@@ -1872,20 +1914,19 @@ async function actionUpdateAgents() {
   }
 
   // ─── Step 4/4: Aplicar cambios ─────────────────────────────────────
-  renderWizardStep(printUpdateBanner, history, '[4/4] Aplicar cambios');
-
   if (index === 0) {
-    await runUpdateWizard(updates);
+    // Modo "Revisar uno por uno" — runUpdateWizard hace su propio renderWizardStep
+    // por cada archivo y va agregando entries al history.
+    await runUpdateWizard(history, updates);
   } else {
+    // Modo "Aplicar todas" — un solo render + ejecución en bloque
+    renderWizardStep(printUpdateBanner, history, '[4/4] Aplicar todas las actualizaciones');
     await runUpdateAll(updates);
+    history.push({
+      label: 'Aplicado',
+      value: `${totalOutdated + totalMissing} archivo${(totalOutdated + totalMissing) > 1 ? 's' : ''} actualizado${(totalOutdated + totalMissing) > 1 ? 's' : ''}`,
+    });
   }
-
-  history.push({
-    label: 'Aplicado',
-    value: index === 0
-      ? 'Revisión finalizada — cambios aplicados según elegiste por archivo'
-      : `${totalOutdated + totalMissing} archivo${(totalOutdated + totalMissing) > 1 ? 's' : ''} actualizado${(totalOutdated + totalMissing) > 1 ? 's' : ''}`,
-  });
 
   // ─── Pantalla final con resumen completo ───────────────────────────
   renderWizardStep(printUpdateBanner, history, '');
