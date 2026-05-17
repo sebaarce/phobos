@@ -23,6 +23,7 @@ export const MEMORY_ENGINE_FILES = [
   { src: 'phobos/memory/.engine/qdrant-client.mjs',   dst: 'vault/memory/.engine/qdrant-client.mjs' },
   { src: 'phobos/memory/.engine/index-vault.mjs',     dst: 'vault/memory/.engine/index-vault.mjs' },
   { src: 'phobos/memory/.engine/search.mjs',          dst: 'vault/memory/.engine/search.mjs' },
+  { src: 'phobos/memory/.engine/list-memory.mjs',     dst: 'vault/memory/.engine/list-memory.mjs' },
   { src: 'phobos/memory/.engine/README.md',           dst: 'vault/memory/.engine/README.md' },
 ];
 

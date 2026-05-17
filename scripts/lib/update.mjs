@@ -23,6 +23,7 @@ export const TRACKED_AGENT_FILES = [
   { src: 'opencode/command/adapt-agents.md',   dst: '.opencode/command/adapt-agents.md',   ignoreModel: false },
   { src: 'opencode/command/models-wizard.md',  dst: '.opencode/command/models-wizard.md',  ignoreModel: false },
   { src: 'opencode/command/reindex-memory.md', dst: '.opencode/command/reindex-memory.md', ignoreModel: false },
+  { src: 'opencode/command/list-memory.md',    dst: '.opencode/command/list-memory.md',    ignoreModel: false },
 ];
 
 export function normalizeIgnoringModel(content) {
