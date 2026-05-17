@@ -543,9 +543,42 @@ async function getCollectionSamples(name, limit = 3) {
   }
 }
 
+// Detecta si el researcher.md del proyecto tiene las reglas RAG (pre-flight
+// search + Previous insights). Si no las tiene, el researcher NUNCA va a
+// consultar el engine, sin importar que Qdrant esté corriendo.
+async function detectResearcherHasRAG() {
+  try {
+    const content = await readFile('.opencode/agent/researcher.md', 'utf-8');
+    return /Pre-flight:\s*semantic\s*search/i.test(content)
+      || /vault\/memory\/\.engine\/search\.mjs/.test(content);
+  } catch {
+    return false;
+  }
+}
+
+// Devuelve la fecha en la que Memory se instaló en este proyecto.
+// Usamos el mtime del config.json o del .index-state.json (lo que exista primero).
+async function getMemoryInstalledAt() {
+  const { stat } = await import('node:fs/promises');
+  const candidates = [
+    'vault/memory/.engine/.index-state.json',
+    'vault/memory/.engine/config.json',
+  ];
+  for (const p of candidates) {
+    try {
+      const s = await stat(p);
+      return s.mtime;
+    } catch {}
+  }
+  return null;
+}
+
 // Recorre vault/memory/tasks/ y reporta cuántas tareas tienen evidencia de uso
 // del memory engine (Previous insights en research.md, conclusion cerrada).
+// Cada tarea incluye el `closedAt` (mtime de conclusion.md) para poder
+// clasificarla como pre/post-instalación de Memory.
 async function checkTaskMemoryUsage() {
+  const { stat } = await import('node:fs/promises');
   const tasksDir = 'vault/memory/tasks';
   const out = { total: 0, closed: 0, withPreviousInsights: 0, tasks: [] };
   if (!await fileExists(tasksDir)) return out;
@@ -561,14 +594,16 @@ async function checkTaskMemoryUsage() {
     if (!e.isDirectory()) continue;
     const slug = e.name;
     const dir = join(tasksDir, slug);
-    const hasConclusion = await fileExists(join(dir, 'conclusion.md'));
+    const conclusionPath = join(dir, 'conclusion.md');
+    const hasConclusion = await fileExists(conclusionPath);
     const researchPath = join(dir, 'research.md');
     const hasResearch = await fileExists(researchPath);
     let hasPreviousInsights = false;
+    let closedAt = null;
+
     if (hasResearch) {
       try {
         const content = await readFile(researchPath, 'utf-8');
-        // Buscamos que tenga la sección Y que tenga al menos un bullet con [[wikilink]]
         if (/##\s*Previous\s*insights/i.test(content)) {
           const section = content.split(/##\s*Previous\s*insights/i)[1] || '';
           const head = section.split(/\n##\s/)[0] || '';
@@ -576,7 +611,14 @@ async function checkTaskMemoryUsage() {
         }
       } catch {}
     }
-    out.tasks.push({ slug, hasConclusion, hasResearch, hasPreviousInsights });
+    if (hasConclusion) {
+      try {
+        const s = await stat(conclusionPath);
+        closedAt = s.mtime;
+      } catch {}
+    }
+
+    out.tasks.push({ slug, hasConclusion, hasResearch, hasPreviousInsights, closedAt });
     out.total++;
     if (hasConclusion) out.closed++;
     if (hasPreviousInsights) out.withPreviousInsights++;
@@ -2591,31 +2633,91 @@ async function actionInspectQdrant() {
     }
   }
 
-  // ── 4. Sanity de uso por agentes (en este proyecto) ───────────────
+  // ── 4. Sanity de agentes — diagnóstico accionable ─────────────────
   console.log('');
   console.log('  ' + bold('Sanity de agentes — uso de Memory en tareas'));
   const usage = await checkTaskMemoryUsage();
+  const researcherHasRAG = await detectResearcherHasRAG();
+  const installedAt = await getMemoryInstalledAt();
+
+  const fmtDate = (d) => d ? d.toISOString().slice(0, 19).replace('T', ' ') : '?';
+
+  console.log('  ' + dim('  researcher.md tiene reglas RAG: ')
+    + (researcherHasRAG ? green('✓') : red('✗ — falta sección "Pre-flight: semantic search"')));
+  console.log('  ' + dim('  Memory instalada en proyecto:   ')
+    + (installedAt ? cyan(fmtDate(installedAt)) : dim('(no detectada)')));
 
   if (usage.total === 0) {
     console.log('  ' + dim('  (sin tareas en vault/memory/tasks/ todavía)'));
   } else {
-    console.log('  ' + dim('  Tareas totales:                          ') + cyan(usage.total));
-    console.log('  ' + dim('  Cerradas (conclusion.md presente):       ') + cyan(usage.closed + '/' + usage.total));
-    console.log('  ' + dim('  Con sección "Previous insights":         ')
-      + (usage.withPreviousInsights > 0
-          ? green(usage.withPreviousInsights + '/' + usage.total + ' ✓ researcher usó el engine')
-          : yellow('0 — researcher con prompt viejo o engine inaccesible')));
+    // Clasificar tareas cerradas en pre/post-instalación de Memory
+    const closedTasks = usage.tasks.filter(t => t.hasConclusion);
+    let historical = [];
+    let postInstall = [];
+    if (installedAt) {
+      for (const t of closedTasks) {
+        if (t.closedAt && t.closedAt < installedAt) historical.push(t);
+        else postInstall.push(t);
+      }
+    } else {
+      postInstall = closedTasks; // sin fecha de install, asumimos todas son post
+    }
+    const postWithInsights = postInstall.filter(t => t.hasPreviousInsights).length;
 
-    // Última tarea cerrada
-    const closed = usage.tasks.filter(t => t.hasConclusion);
-    if (closed.length > 0) {
-      const last = closed[closed.length - 1];
+    console.log('');
+    console.log('  ' + dim('  Tareas totales:                    ') + cyan(usage.total));
+    console.log('  ' + dim('  Cerradas:                          ') + cyan(closedTasks.length + '/' + usage.total));
+    if (historical.length > 0) {
+      console.log('  ' + dim('  Pre-Memory (no aplica):            ') + dim(historical.length + ' tarea(s) históricas, no van a tener Previous insights'));
+    }
+    console.log('  ' + dim('  Post-Memory:                       ') + cyan(postInstall.length));
+    if (postInstall.length > 0) {
+      const ratio = postWithInsights + '/' + postInstall.length;
+      const color = postWithInsights === postInstall.length ? green
+                  : postWithInsights > 0 ? yellow
+                  : red;
+      console.log('  ' + dim('    Con Previous insights:           ') + color(ratio));
+    }
+
+    // Última tarea cerrada post-Memory
+    if (postInstall.length > 0) {
+      const last = postInstall[postInstall.length - 1];
       console.log('');
-      console.log('  ' + dim('  Última tarea cerrada: ') + cyan(last.slug));
-      console.log('  ' + dim('    research.md tiene Previous insights: ')
-        + (last.hasPreviousInsights
-            ? green('✓')
-            : yellow('✗ — researcher no consultó el engine en esta tarea')));
+      console.log('  ' + dim('  Última tarea cerrada post-Memory: ') + cyan(last.slug));
+      console.log('  ' + dim('    cerrada el:                      ') + cyan(fmtDate(last.closedAt)));
+      console.log('  ' + dim('    Previous insights presente:      ')
+        + (last.hasPreviousInsights ? green('✓') : yellow('✗')));
+    }
+
+    // ── Diagnóstico accionable ─────────────────────────────────────
+    console.log('');
+    console.log('  ' + bold('Diagnóstico'));
+
+    if (!researcherHasRAG) {
+      console.log('  ' + red('  ✗ El researcher.md de este proyecto no tiene la regla RAG.'));
+      console.log('  ' + dim('    El researcher NUNCA va a consultar el engine en este estado.'));
+      console.log('  ' + dim('    Solución:'));
+      console.log('    ' + cyan('    npx github:sebaarce/phobos') + dim('  → "Actualizar agentes" → aplicar'));
+      console.log('  ' + dim('    Después reiniciá OpenCode para que tome el prompt nuevo.'));
+    } else if (postInstall.length === 0) {
+      console.log('  ' + yellow('  ⚠ Sin tareas cerradas después de instalar Memory.'));
+      console.log('  ' + dim('    No hay datos para validar el flujo RAG todavía.'));
+      console.log('  ' + dim('    Probá una tarea nueva en Phobos y volvé a Inspect.'));
+    } else if (postWithInsights === postInstall.length) {
+      console.log('  ' + green('  ✓ Todo OK. ') + dim('Researcher consulta el engine en cada tarea post-Memory.'));
+    } else if (postWithInsights === 0) {
+      console.log('  ' + yellow('  ⚠ researcher.md tiene reglas RAG, pero ninguna tarea post-Memory las usó.'));
+      console.log('  ' + dim('    Causa más probable: OpenCode todavía tiene el prompt viejo cacheado.'));
+      console.log('  ' + dim('    Solución:'));
+      console.log('  ' + dim('      1. Cerrar OpenCode completamente (no solo el tab).'));
+      console.log('  ' + dim('      2. Volver a abrirlo.'));
+      console.log('  ' + dim('      3. Crear una tarea nueva de prueba.'));
+      console.log('  ' + dim('      4. Volver a Inspect Qdrant y verificar.'));
+      console.log('  ' + dim('    Si persiste: el researcher puede estar fallando silenciosamente al correr'));
+      console.log('  ' + dim('    search.mjs (ej: por permisos). Revisá los logs de la sesión hija.'));
+    } else {
+      console.log('  ' + yellow('  ⚠ Uso mixto: algunas tareas post-Memory tienen Previous insights, otras no.'));
+      console.log('  ' + dim('    Puede ser intermitente — chequeá las que faltan, capaz fallaron por Qdrant down momentáneo.'));
     }
   }
 
