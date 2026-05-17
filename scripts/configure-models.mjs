@@ -805,8 +805,6 @@ async function writeModel(agentDir, agent, newModel) {
 // ═══════════════════════════════════════════════════════════════════
 
 function summarizeDetection(detected) {
-  console.log('\n' + dim('  [2/4]'));
-
   if (detected.models.size === 0) {
     console.log(yellow('\n  ⚠ No se detectaron modelos.\n'));
     if (detected.notes.length > 0) {
@@ -1178,8 +1176,6 @@ function renderSuggestionPanel(recommended, current) {
 }
 
 async function chooseMode(allModels, current) {
-  console.log('\n' + dim('  [3/4]'));
-
   const detectedProviders = Array.from(new Set(allModels.map(m => getProvider(m)))).sort();
   const hasMultipleProviders = detectedProviders.length > 1;
 
@@ -1270,8 +1266,6 @@ async function chooseMode(allModels, current) {
 // ═══════════════════════════════════════════════════════════════════
 
 function printDiff(current, target) {
-  console.log('\n' + dim('  [4/4]'));
-
   const wAgent = Math.max(...AGENTS.map(a => a.length));
   const wCur   = Math.max(...AGENTS.map(a => (current[a] || '').length));
   const wTgt   = Math.max(...AGENTS.map(a => (target[a]  || '').length));
@@ -1719,6 +1713,33 @@ function showSadGoodbye() {
 // Acciones — cada una es una "pantalla" del wizard
 // ═══════════════════════════════════════════════════════════════════
 
+// renderWizardStep — clear + banner + historial compacto + header del paso actual.
+// Llamar al INICIO de cada step grande. Las preguntas/info del step se acumulan
+// debajo del header hasta que se llama de nuevo (clear + nuevo header).
+//
+// history: array de { label, value } — el resumen de respuestas ya completadas.
+// stepHeader: string con el header del paso actual (ej: "[2/4] Definir lista de modelos").
+function renderWizardStep(bannerFn, history, stepHeader) {
+  clearScreen();
+  bannerFn();
+
+  if (history.length > 0) {
+    const wLabel = Math.max(...history.map(h => visibleLen(h.label)));
+    for (const item of history) {
+      const padded = item.label + ' '.repeat(Math.max(0, wLabel - visibleLen(item.label)));
+      console.log('  ' + green('✓') + ' ' + padded + '   ' + dim(item.value));
+    }
+    console.log('');
+    console.log(dim('  ─────────────────────────────────────────────────────'));
+    console.log('');
+  }
+
+  if (stepHeader) {
+    console.log('  ' + bold(cyan(stepHeader)));
+    console.log('');
+  }
+}
+
 async function actionUpdateAgents() {
   clearScreen();
   printUpdateBanner();
@@ -1727,16 +1748,13 @@ async function actionUpdateAgents() {
 }
 
 async function actionSetModels(agentDir) {
-  clearScreen();
-  printModelsBanner();
+  const history = [];
 
-  const current = await readCurrentModels(agentDir);
-
-  // Paso 1: detectar
+  // ─── Step 1/4: Detectar providers ──────────────────────────────────
+  renderWizardStep(printModelsBanner, history, '[1/4] Detectando providers conectados...');
   const detected = await detect();
 
   if (detected.providers.size === 0) {
-    console.log('');
     console.log('  ' + yellow('✗ No detecté proveedores conectados en OpenCode.'));
     console.log('');
     console.log('  ' + dim('Para configurar modelos necesitás al menos un proveedor conectado.'));
@@ -1750,37 +1768,66 @@ async function actionSetModels(agentDir) {
   }
 
   summarizeDetection(detected);
+  history.push({
+    label: 'Detección',
+    value: `${detected.providers.size} provider${detected.providers.size > 1 ? 's' : ''}, ${detected.models.size} modelos`,
+  });
 
-  // Paso 2: lista final
+  // ─── Step 2/4: Definir lista de modelos a asignar ──────────────────
+  renderWizardStep(printModelsBanner, history, '[2/4] Definir lista de modelos a asignar');
   const allModels = await getFinalModelList(detected);
   if (!allModels || allModels.length === 0) {
-    console.log('\nCancelado.');
+    console.log('\n  ' + yellow('Lista vacía — no se puede continuar.'));
     await pressEnterToContinue();
     return;
   }
+  history.push({
+    label: 'Lista de modelos',
+    value: `${allModels.length} modelo${allModels.length > 1 ? 's' : ''} disponibles`,
+  });
 
-  // Paso 3: asignar
+  // ─── Step 3/4: Asignar modelo a cada agente ────────────────────────
+  renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo a cada agente');
+  const current = await readCurrentModels(agentDir);
   const target = await chooseMode(allModels, current);
   if (!target) {
-    console.log('\nCancelado.');
+    history.push({ label: 'Asignación', value: 'Cancelado por el usuario' });
+    renderWizardStep(printModelsBanner, history, '');
+    console.log('  ' + yellow('Wizard cancelado — sin cambios aplicados.'));
     await pressEnterToContinue();
     return;
   }
+  const agentsToChange = AGENTS.filter(a => current[a] !== target[a]);
+  history.push({
+    label: 'Asignación',
+    value: agentsToChange.length > 0
+      ? `${agentsToChange.length}/${AGENTS.length} agentes con cambios pendientes`
+      : `Todos los agentes ya tenían el modelo deseado`,
+  });
 
-  // Paso 4: diff y aplicar
+  // ─── Step 4/4: Aplicar cambios ─────────────────────────────────────
+  renderWizardStep(printModelsBanner, history, '[4/4] Aplicar cambios');
   const hasChanges = printDiff(current, target);
 
   if (hasChanges) {
     const confirm = await tuiYesNo('\n¿Aplicar los cambios?', false);
     if (confirm) {
       await applyChanges(agentDir, current, target);
+      history.push({
+        label: 'Aplicado',
+        value: `${agentsToChange.length} cambio${agentsToChange.length > 1 ? 's' : ''} persistido${agentsToChange.length > 1 ? 's' : ''} en .opencode/agent/`,
+      });
     } else {
-      console.log('\nCancelado. Ningún archivo modificado.');
+      history.push({ label: 'Aplicado', value: 'Cancelado por el usuario, ningún archivo modificado' });
     }
   } else {
-    console.log('\n' + dim('  ✓ Los modelos ya están configurados — no hay cambios que aplicar.'));
+    console.log('\n  ' + dim('✓ Los modelos ya están configurados — no hay cambios que aplicar.'));
+    history.push({ label: 'Aplicado', value: 'Sin cambios (ya estaba al día)' });
   }
 
+  // ─── Pantalla final con resumen completo ───────────────────────────
+  renderWizardStep(printModelsBanner, history, '');
+  console.log('  ' + green('Wizard completado.'));
   await pressEnterToContinue();
 }
 
