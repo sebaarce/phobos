@@ -29,9 +29,13 @@ services:
     image: qdrant/qdrant:latest
     container_name: phobos-qdrant
     restart: unless-stopped
+    # Bind a loopback (127.0.0.1) — Qdrant queda accesible SOLO desde la máquina
+    # local. Sin esto, Docker Desktop mapea a 0.0.0.0 y el puerto queda visible
+    # en LAN. Cualquier proceso en la misma red podría leer/escribir/borrar
+    # vectores (corremos sin auth en setup local).
     ports:
-      - "6333:6333"   # REST API
-      - "6334:6334"   # gRPC (no usado por el cliente JS pero útil para tooling)
+      - "127.0.0.1:6333:6333"   # REST API
+      - "127.0.0.1:6334:6334"   # gRPC (no usado por el cliente JS pero útil para tooling)
     volumes:
       - ./qdrant-storage:/qdrant/storage
     environment:

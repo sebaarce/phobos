@@ -14,6 +14,7 @@ import {
   detectQdrantStatus,
   listQdrantCollectionsDetailed,
   getCollectionSamples,
+  detectStaleStoragePath,
 } from './engine.mjs';
 import { getProjectActiveCollection } from './collection.mjs';
 
@@ -275,6 +276,46 @@ export async function actionInspectQdrant() {
   }
   console.log('  ' + green('  ✓ healthy en ') + cyan(QDRANT_URL));
   console.log('  ' + dim('    Dashboard: ') + cyan(QDRANT_URL + '/dashboard'));
+
+  // ── 1.5 Detección de issues en el compose global ──────────────────
+  const staleCheck = await detectStaleStoragePath();
+  // Chequeo extra: puertos expuestos en 0.0.0.0 (binding default de Docker)
+  // en vez de loopback (127.0.0.1). Riesgo en LAN si Qdrant corre sin auth.
+  let composeHasOpenPort = false;
+  if (await fileExists(QDRANT_COMPOSE_GLOBAL)) {
+    try {
+      const composeContent = await readFile(QDRANT_COMPOSE_GLOBAL, 'utf-8');
+      // Match port mapping SIN prefijo de IP (formato "6333:6333" o "- 6333:6333")
+      // Si tiene "127.0.0.1:6333:6333" no matchea.
+      composeHasOpenPort = /^[ \t-]*"?6333:6333"?\s*(?:#|$)/m.test(composeContent);
+    } catch {}
+  }
+
+  if (staleCheck.hasStalePath || staleCheck.oldDirExists || composeHasOpenPort) {
+    console.log('');
+    console.log('  ' + bold(yellow('⚠ Issues detectados en el compose global')));
+
+    if (staleCheck.hasStalePath) {
+      console.log('  ' + dim('  · El compose tiene un path viejo: ') + yellow('./.qdrant_storage'));
+      console.log('  ' + dim('    Debería ser: ./qdrant-storage'));
+    }
+    if (staleCheck.oldDirExists) {
+      console.log('  ' + dim('  · Carpeta stale presente: ') + yellow(staleCheck.oldDir));
+      if (staleCheck.newDirExists) {
+        console.log('  ' + dim('    Carpeta nueva también presente: ') + cyan(staleCheck.newDir));
+        console.log('  ' + dim('    ⚠ Datos potencialmente duplicados o desincronizados.'));
+      }
+    }
+    if (composeHasOpenPort) {
+      console.log('  ' + dim('  · Puerto 6333 expuesto en ') + yellow('0.0.0.0') + dim(' (visible en LAN).'));
+      console.log('  ' + dim('    Riesgo: Qdrant corre sin auth — cualquier proceso en tu red puede'));
+      console.log('  ' + dim('    leer/borrar vectores. Debería bindear a 127.0.0.1:6333:6333 (loopback).'));
+    }
+
+    console.log('');
+    console.log('  ' + dim('  Solución: submenú Memory → "Reset Qdrant global" (regenera el compose'));
+    console.log('  ' + dim('  con los valores correctos; ofrece backup antes de borrar datos).'));
+  }
 
   // ── 2. Collections en la instancia ───────────────────────────────
   console.log('');

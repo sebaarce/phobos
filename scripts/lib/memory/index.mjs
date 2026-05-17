@@ -1,7 +1,7 @@
 // Memory router — actionMemory (entrada del menú) + actionMemoryReindexForce + actionSetCollection.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { rl } from '../runtime.mjs';
-import { fileExists } from '../fs-utils.mjs';
+import { fileExists, safeWriteFile } from '../fs-utils.mjs';
 import { cyan, dim, yellow, red, green, bold, pad } from '../colors.mjs';
 import { tuiSelect, tuiYesNo, panel, clearScreen } from '../tui.mjs';
 import { runChildCaptured } from '../child.mjs';
@@ -29,7 +29,8 @@ async function updateConfigCollection(newCollectionName) {
   const parsed = JSON.parse(raw);
   if (!parsed.qdrant) parsed.qdrant = {};
   parsed.qdrant.collection = newCollectionName;
-  await writeFile(CONFIG_PATH, JSON.stringify(parsed, null, 2) + '\n');
+  // safeWriteFile valida sandbox (cwd) + rechaza symlinks.
+  await safeWriteFile(CONFIG_PATH, JSON.stringify(parsed, null, 2) + '\n');
 }
 
 // Borra una collection de Qdrant via REST API. Devuelve true si ok.

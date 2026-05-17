@@ -1,9 +1,9 @@
 // Bootstrap — chequeo y creación del scaffold (agentes, comandos, vault).
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { cwd, stdout } from 'node:process';
 import { BOOTSTRAP_GROUPS, TEMPLATES_DIR, srcToDst } from './runtime.mjs';
-import { fileExists } from './fs-utils.mjs';
+import { fileExists, safeWriteFile } from './fs-utils.mjs';
 import { green, dim, bold } from './colors.mjs';
 import { tuiYesNo } from './tui.mjs';
 
@@ -60,19 +60,18 @@ export async function bootstrap(missing) {
     if (files.length === 0) continue;
     for (let i = 0; i < files.length; i++) {
       const src = join(TEMPLATES_DIR, files[i]);
-      const dst = join(cwd(), srcToDst(files[i]));
-      await mkdir(dirname(dst), { recursive: true });
+      const dstRel = srcToDst(files[i]);
       const content = await readFile(src, 'utf-8');
-      await writeFile(dst, content);
+      // safeWriteFile valida symlinks + path-traversal y crea el dirname.
+      await safeWriteFile(dstRel, content);
       drawProgress(groupLabels[group], i + 1, files.length);
     }
   }
 
   if (missing.gitignore) {
     const src = join(TEMPLATES_DIR, '.gitignore');
-    const dst = join(cwd(), '.gitignore');
     const content = await readFile(src, 'utf-8');
-    await writeFile(dst, content);
+    await safeWriteFile('.gitignore', content);
     console.log(`  ${green('✓')} .gitignore creado`);
   }
 

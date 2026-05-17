@@ -1,9 +1,9 @@
 // Update flow — compara local vs template, preserva model:
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { cwd, stdin } from 'node:process';
 import { TEMPLATES_DIR } from './runtime.mjs';
-import { fileExists, tryExec } from './fs-utils.mjs';
+import { fileExists, tryExec, safeWriteFile } from './fs-utils.mjs';
 import { green, yellow, red, cyan, dim, bold } from './colors.mjs';
 import { pad } from './colors.mjs';
 import { panel, tuiSelect, tuiYesNo } from './tui.mjs';
@@ -73,7 +73,7 @@ export async function applyUpdate(file, { preserveLocalModel = true } = {}) {
   }
   // Si preserveLocalModel=false, dejamos el modelo del template intacto.
 
-  await writeFile(file.localPath, content);
+  await safeWriteFile(file.localPath, content);
 }
 
 export async function getTemplateModel(file) {
@@ -88,8 +88,8 @@ export async function getTemplateModel(file) {
 
 export async function copyTemplateFile(file) {
   const content = await readFile(file.templatePath, 'utf-8');
-  await mkdir(dirname(file.localPath), { recursive: true });
-  await writeFile(file.localPath, content);
+  // safeWriteFile crea el dirname y valida path/symlinks.
+  await safeWriteFile(file.localPath, content);
 }
 
 export function showUpdateStatus(updates) {
@@ -260,10 +260,11 @@ export async function backupAgents(filesToBackup) {
   for (const relPath of filesToBackup) {
     const filename = basename(relPath);
     const src = join(cwd(), relPath);
-    const dst = join(backupDir, filename);
+    // backupDir es relativo a cwd → safeWriteFile valida sandbox + symlinks.
+    const dstRel = join(backupRel, filename);
     if (await fileExists(src)) {
       const content = await readFile(src, 'utf-8');
-      await writeFile(dst, content);
+      await safeWriteFile(dstRel, content);
       copied++;
       names.push(filename);
     }

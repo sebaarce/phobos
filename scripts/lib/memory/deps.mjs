@@ -1,8 +1,8 @@
 // Detección + instalación de deps de Memory (npm, peer-deps, etc).
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cwd, platform } from 'node:process';
-import { fileExists, tryExec } from '../fs-utils.mjs';
+import { fileExists, tryExec, safeWriteFile } from '../fs-utils.mjs';
 import { rl } from '../runtime.mjs';
 import { cyan, dim, bold, green, yellow, red } from '../colors.mjs';
 import { tuiSelect } from '../tui.mjs';
@@ -69,7 +69,8 @@ export async function addLegacyPeerDepsToNpmrc() {
   const content = existing.trim()
     ? existing.trim() + '\n\n' + snippet
     : snippet;
-  await writeFile(npmrcPath, content);
+  // .npmrc vive en cwd → safeWriteFile valida sandbox + rechaza symlinks.
+  await safeWriteFile('.npmrc', content);
   return { added: true };
 }
 

@@ -13,9 +13,24 @@ Interpretación:
 - Vacío o cualquier valor que no sea reconocido → **incremental** (default, rápido).
 - `full`, `force`, `--force` → **reindex completo** (más lento).
 
+## Argument parsing (HARD RULE — seguridad)
+
+`$ARGUMENTS` es input del usuario sin sanitizar. **NO lo concatenes literal a un comando shell**. Para este comando hacé el parsing así:
+
+1. Tomá `$ARGUMENTS` y stripealo de whitespace.
+2. Comparalo (lowercase) contra el set exacto `{"full", "force", "--force"}`.
+3. Si matchea EXACTAMENTE alguno de esos tres → activá modo `--force`.
+4. Si está vacío o NO matchea (incluyendo cualquier cosa con `;`, `&`, `|`, `` ` ``, `$`, paréntesis, espacios, etc.) → modo `--incremental`.
+
+**Nunca interpoles `$ARGUMENTS` en el comando shell.** Los dos flags válidos (`--force` / `--incremental`) son strings literales hardcoded — el LLM elige cuál usar, pero los bytes del usuario nunca van al shell.
+
+Si detectás caracteres peligrosos en `$ARGUMENTS`, antes de ejecutar reportá:
+
+> No reconozco esos argumentos. Formas válidas: `/reindex-memory` (incremental), `/reindex-memory full` (reindex completo).
+
 ## Comando a ejecutar
 
-Si los argumentos contienen `full`, `force` o `--force`, ejecutá:
+Si el parsing arrojó modo force, ejecutá:
 
 ```bash
 node vault/memory/.engine/index-vault.mjs --force

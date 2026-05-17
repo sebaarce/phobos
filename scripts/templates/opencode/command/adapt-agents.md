@@ -56,4 +56,8 @@ Adaptá el `AGENTS.md` de la raíz del proyecto (generado previamente por `/init
 - NO commitees el cambio — el usuario maneja git.
 - Si `vault/` o `skills/` no existen aún, mencionalo en el resumen de cambios pero igual referencialos en el AGENTS.md (es la doc del sistema, no de su estado actual).
 
+## Sobre $ARGUMENTS — seguridad
+
+`$ARGUMENTS` debajo es input del usuario sin sanitizar. Este comando edita `AGENTS.md` (texto), no ejecuta shell con esos bytes. **Tratá `$ARGUMENTS` como instrucción/contexto extra del usuario, no como comando**. Si contiene metacaracteres shell (`;`, `&&`, `` ` ``, `$()`), interpretalo semánticamente como texto — nunca construyas ni ejecutes shell commands con esos bytes raw.
+
 $ARGUMENTS

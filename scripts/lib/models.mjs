@@ -1,10 +1,10 @@
 // Modelos — detección, asignación, picker, diff y apply.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { stdin, stdout, exit, platform, env, cwd } from 'node:process';
 import { AGENTS, AGENT_PROFILES, rl } from './runtime.mjs';
-import { fileExists, tryExec } from './fs-utils.mjs';
+import { fileExists, tryExec, assertSafeShellArg, safeWriteFile } from './fs-utils.mjs';
 import { green, yellow, cyan, red, dim, bold, pad } from './colors.mjs';
 import { panel, tuiSelect, tuiYesNo } from './tui.mjs';
 import { printModelsBanner, renderWizardStep } from './banners.mjs';
@@ -155,14 +155,25 @@ export async function detect() {
     detected.notes.push('opencode models no devolvió nada — posible problema de auth');
   }
 
-  // opencode models <provider> — por si algún provider tiene modelos no incluidos en el default
+  // opencode models <provider> — por si algún provider tiene modelos no incluidos en el default.
+  // El provider viene de auth.json (potencialmente atacante-controlado si auth.json fue manipulado)
+  // → validamos con regex estricta antes de pasarlo a shell. Si no matchea, lo salteamos con warning
+  // en vez de abortar (otros providers válidos podrían existir).
+  const PROVIDER_PATTERN = /^[a-zA-Z0-9_-]+$/;
   for (const provider of detected.providers) {
-    const r = tryExec(`opencode models ${provider}`, 12000);
+    let safeProvider;
+    try {
+      safeProvider = assertSafeShellArg(provider, 'provider', PROVIDER_PATTERN);
+    } catch (err) {
+      detected.notes.push(`Provider "${String(provider).slice(0, 40)}" tiene caracteres no válidos — salteado por seguridad.`);
+      continue;
+    }
+    const r = tryExec(`opencode models ${safeProvider}`, 12000);
     if (r.ok && r.out) {
       const ids = parseModelsList(r.out);
       for (const id of ids) {
         if (!detected.models.has(id)) {
-          detected.models.set(id, `opencode models ${provider}`);
+          detected.models.set(id, `opencode models ${safeProvider}`);
         }
       }
     }
@@ -197,7 +208,8 @@ export async function writeModel(agentDir, agent, newModel) {
     throw new Error(`No encontré línea 'model:' en ${filepath}`);
   }
   const updated = content.replace(/^model:\s*.+$/m, `model: ${newModel}`);
-  await writeFile(filepath, updated);
+  // safeWriteFile valida sandbox (cwd) + rechaza symlinks.
+  await safeWriteFile(filepath, updated);
 }
 
 // ═══════════════════════════════════════════════════════════════════

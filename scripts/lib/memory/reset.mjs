@@ -14,6 +14,7 @@ import {
   detectQdrantStatus,
   listQdrantCollections,
   ensurePhobosHome,
+  detectStaleStoragePath,
 } from './engine.mjs';
 import { getProjectActiveCollection } from './collection.mjs';
 
@@ -73,50 +74,104 @@ export async function actionResetQdrant() {
   // ─── Step 2/5: Backup opcional ──────────────────────────────────────
   renderWizardStep(printMemoryBanner, history, '[2/5] Backup opcional del storage actual');
 
-  let backupDone = false;
-  let backupPath = '';
+  // Detectar también la carpeta stale del template viejo (`.qdrant_storage`)
+  // — usuarios que corrieron install antes del fix de naming tienen sus datos ahí.
+  const stale = await detectStaleStoragePath();
+  const dirsToBackup = [];
+  if (await fileExists(storageDir)) {
+    dirsToBackup.push({ path: storageDir, size: storageSize, isStale: false });
+  }
+  if (stale.oldDirExists && stale.oldDir !== storageDir) {
+    const staleSize = await getDirSize(stale.oldDir);
+    if (staleSize > 0) {
+      dirsToBackup.push({ path: stale.oldDir, size: staleSize, isStale: true });
+    }
+  }
 
-  if (storageSize > 0) {
+  const totalSize = dirsToBackup.reduce((sum, d) => sum + d.size, 0);
+  const backups = [];   // [{ src, dst, ok }]
+  let backupDone = false;
+
+  if (totalSize > 0) {
+    console.log('');
+    if (dirsToBackup.length > 1) {
+      console.log('  ' + bold('Carpetas a respaldar:'));
+      for (const d of dirsToBackup) {
+        const tag = d.isStale ? yellow(' [stale del template viejo]') : '';
+        console.log('    · ' + cyan(d.path) + dim(' (' + formatBytes(d.size) + ')') + tag);
+      }
+    }
     const wantBackup = await tuiYesNo(
-      `¿Hacer backup de ${cyan(formatBytes(storageSize))} antes de borrar?`,
+      `¿Hacer backup de ${cyan(formatBytes(totalSize))} antes de borrar?`,
       true,
     );
     if (wantBackup) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-      backupPath = join(PHOBOS_HOME, `qdrant-storage-backup-${ts}`);
 
       // Antes de copiar, bajar Qdrant para evitar archivos en uso
       console.log(dim('\n  Bajando Qdrant para evitar archivos en uso...'));
       rl.pause();
       await runChild('docker', ['compose', '-f', QDRANT_COMPOSE_GLOBAL, 'down'], 'docker compose down');
 
-      console.log(dim('  Copiando ' + storageDir + ' → ' + backupPath));
-      console.log(dim('  (esto puede tardar según el tamaño...)'));
+      // Backup de cada carpeta presente (sufijo distintivo si es stale)
+      for (const d of dirsToBackup) {
+        const suffix = d.isStale ? '-stale' : '';
+        const dst = join(PHOBOS_HOME, `qdrant-storage-backup-${ts}${suffix}`);
+        console.log(dim('  Copiando ' + d.path + ' → ' + dst));
+        try {
+          await copyDirRecursive(d.path, dst);
+          backups.push({ src: d.path, dst, ok: true });
+          console.log(green('  ✓ Backup OK'));
+        } catch (err) {
+          backups.push({ src: d.path, dst, ok: false, err: err.message || String(err) });
+          console.log(yellow('  ⚠ Backup falló para ' + d.path + ': ' + (err.message || err)));
+        }
+      }
 
-      try {
-        await copyDirRecursive(storageDir, backupPath);
-        backupDone = true;
-        console.log(green('  ✓ Backup completado.'));
-      } catch (err) {
-        console.log(yellow('  ⚠ Backup falló: ' + (err.message || err)));
-        const continueWithoutBackup = await tuiYesNo('¿Continuar igual con el reset (sin backup)?', false);
+      const anyOk = backups.some(b => b.ok);
+      const anyFail = backups.some(b => !b.ok);
+
+      if (anyFail && !anyOk) {
+        const continueWithoutBackup = await tuiYesNo('Ningún backup tuvo éxito. ¿Continuar igual con el reset (sin backup)?', false);
         if (!continueWithoutBackup) {
-          history.push({ label: 'Backup', value: 'Falló — wizard abortado para no perder datos' });
+          history.push({ label: 'Backup', value: 'Todos fallaron — wizard abortado' });
           renderWizardStep(printMemoryBanner, history, '');
           console.log(yellow('  Reset abortado. Datos intactos.'));
           await pressEnterToContinue();
           return;
         }
+      } else if (anyFail) {
+        const continueAnyway = await tuiYesNo(
+          `Algunos backups fallaron (${backups.filter(b => !b.ok).length}/${backups.length}). ¿Continuar?`,
+          false,
+        );
+        if (!continueAnyway) {
+          history.push({ label: 'Backup', value: 'Parcial — wizard abortado por elección del usuario' });
+          renderWizardStep(printMemoryBanner, history, '');
+          console.log(yellow('  Reset abortado.'));
+          await pressEnterToContinue();
+          return;
+        }
       }
+      backupDone = anyOk;
     }
   } else {
-    console.log(dim('  Storage vacío o inexistente — no hay nada que respaldar.'));
+    console.log(dim('  Sin carpetas de storage con contenido — no hay nada que respaldar.'));
   }
+
+  // Para el resto del wizard, `backupPath` se mantiene como el path del backup
+  // principal (qdrant-storage) si existe; si solo hay backup del stale, ese.
+  const backupPath = backups.find(b => b.ok && !b.dst.endsWith('-stale'))?.dst
+                  || backups.find(b => b.ok)?.dst
+                  || '';
+
   history.push({
     label: 'Backup',
-    value: backupDone
-      ? 'Guardado en ' + basename(backupPath)
-      : (storageSize === 0 ? 'No aplica (storage vacío)' : 'Saltado por el usuario'),
+    value: !backupDone
+      ? (totalSize === 0 ? 'No aplica (sin contenido)' : 'Saltado o falló')
+      : backups.length === 1
+        ? `Guardado en ${basename(backups[0].dst)}`
+        : `${backups.filter(b => b.ok).length} de ${backups.length} carpetas respaldadas`,
   });
 
   // ─── Step 3/5: Bajar + remover contenedor ───────────────────────────
@@ -131,16 +186,27 @@ export async function actionResetQdrant() {
   // ─── Step 4/5: Borrar storage + compose ─────────────────────────────
   renderWizardStep(printMemoryBanner, history, '[4/5] Borrar storage y compose viejos');
 
+  // Storage path correcto (template actual)
   if (await fileExists(storageDir)) {
     await rmrf(storageDir);
     console.log(dim('  · ') + cyan(storageDir) + dim(' borrado'));
   }
+
+  // Path stale del template viejo (`.qdrant_storage` con punto + underscore).
+  // Si un usuario corrió install antes del fix de naming, los datos quedan ahí
+  // y el reset moderno los dejaba intactos → datos zombies. Lo limpiamos también.
+  const staleStorageDir = join(PHOBOS_HOME, '.qdrant_storage');
+  if (await fileExists(staleStorageDir)) {
+    await rmrf(staleStorageDir);
+    console.log(dim('  · ') + yellow(staleStorageDir) + dim(' borrado (path stale del template viejo)'));
+  }
+
   if (await fileExists(QDRANT_COMPOSE_GLOBAL)) {
     const { rm } = await import('node:fs/promises');
     await rm(QDRANT_COMPOSE_GLOBAL, { force: true });
     console.log(dim('  · ') + cyan(QDRANT_COMPOSE_GLOBAL) + dim(' borrado'));
   }
-  history.push({ label: 'Limpieza', value: 'storage + compose eliminados' });
+  history.push({ label: 'Limpieza', value: 'storage + compose eliminados (incluyendo path stale si existía)' });
 
   // ─── Step 5/5: Regenerar, levantar, re-indexar ──────────────────────
   renderWizardStep(printMemoryBanner, history, '[5/5] Regenerar Qdrant limpio y re-indexar este proyecto');

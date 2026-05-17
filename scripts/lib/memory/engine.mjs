@@ -1,10 +1,10 @@
 // Memory engine — Qdrant global state + helpers que tocan ~/.phobos/ y el filesystem del proyecto.
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { cwd } from 'node:process';
 import { TEMPLATES_DIR } from '../runtime.mjs';
-import { fileExists, tryExec } from '../fs-utils.mjs';
+import { fileExists, tryExec, safeWriteFile } from '../fs-utils.mjs';
 import { cyan, dim, yellow } from '../colors.mjs';
 
 // Path global donde vive la instancia compartida de Qdrant.
@@ -122,10 +122,44 @@ export async function ensurePhobosHome() {
       throw new Error(`Template no encontrado: ${srcPath}`);
     }
     const content = await readFile(srcPath, 'utf-8');
-    await writeFile(QDRANT_COMPOSE_GLOBAL, content);
+    // PHOBOS_HOME (no cwd) — el compose vive en ~/.phobos/. safeWriteFile
+    // valida que el path final quede dentro de PHOBOS_HOME (rechaza symlinks
+    // que apunten a otro lado).
+    await safeWriteFile(QDRANT_COMPOSE_GLOBAL, content, { allowedRoot: PHOBOS_HOME });
     return { created: true };
   }
   return { created: false };
+}
+
+// Detecta si el ~/.phobos/docker-compose.qdrant.yml tiene el bug viejo donde
+// el volumen apuntaba a ./.qdrant_storage (con punto + underscore) en vez de
+// ./qdrant-storage (sin punto, con guión). Si tiene el bug, los datos viven
+// en una carpeta distinta a la que el wizard administra → reset / backup
+// inconsistentes.
+//
+// Devuelve { hasStalePath, oldDirExists, newDirExists } con info para
+// que el caller decida si mostrar warning + ofrecer migración.
+export async function detectStaleStoragePath() {
+  const result = {
+    hasStalePath: false,
+    oldDirExists: false,
+    newDirExists: false,
+    oldDir: join(PHOBOS_HOME, '.qdrant_storage'),
+    newDir: join(PHOBOS_HOME, 'qdrant-storage'),
+  };
+
+  if (await fileExists(QDRANT_COMPOSE_GLOBAL)) {
+    try {
+      const content = await readFile(QDRANT_COMPOSE_GLOBAL, 'utf-8');
+      // Detecta la línea vieja del template (con punto + underscore)
+      result.hasStalePath = /\.\/\.qdrant_storage:/.test(content);
+    } catch {}
+  }
+
+  result.oldDirExists = await fileExists(result.oldDir);
+  result.newDirExists = await fileExists(result.newDir);
+
+  return result;
 }
 
 // Copia el engine al proyecto + reescribe config.json con el collection slug
@@ -134,12 +168,10 @@ export async function ensurePhobosHome() {
 export async function copyMemoryEngineToProject(collectionName) {
   for (const file of MEMORY_ENGINE_FILES) {
     const srcPath = join(TEMPLATES_DIR, file.src);
-    const dstPath = join(cwd(), file.dst);
     if (!await fileExists(srcPath)) {
       console.log(yellow(`  ⚠ template no encontrado: ${file.src}`));
       continue;
     }
-    await mkdir(dirname(dstPath), { recursive: true });
     let content = await readFile(srcPath, 'utf-8');
 
     // Para config.json — substituir el collection name por el slug del proyecto.
@@ -149,7 +181,9 @@ export async function copyMemoryEngineToProject(collectionName) {
       content = JSON.stringify(parsed, null, 2) + '\n';
     }
 
-    await writeFile(dstPath, content);
+    // file.dst es relativo al cwd → safeWriteFile valida sandbox + symlinks
+    // y crea dirname automáticamente.
+    await safeWriteFile(file.dst, content);
     console.log(dim('  · ') + cyan(file.dst));
   }
 }
@@ -166,6 +200,7 @@ export async function appendGitignoreSnippet() {
     return;
   }
   const joined = (existing.trim() + '\n\n' + snippet.trim() + '\n').replace(/^\s+/, '');
-  await writeFile(gitignorePath, joined);
+  // .gitignore vive en cwd → safeWriteFile valida sandbox + symlinks.
+  await safeWriteFile('.gitignore', joined);
   console.log(dim('  · .gitignore actualizado con .index-state.json'));
 }
