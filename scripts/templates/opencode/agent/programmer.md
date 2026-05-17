@@ -126,27 +126,74 @@ Rules:
 
 **Why**: the TodoList is the **real-time mirror** of the implementation state. The user, in the parent session, can see your progress without entering your child session. Without TODO, it looks like you are stuck for the entire work.
 
-## Step 0 — Load language-specific skills (hard rule)
+## Step 0 — Discover (NOT yet load) language-specific skills (hard rule)
 
 **Before touching any code**, do this:
 
 1. Read `plan.md` and locate the `## Target stack` block.
 2. Extract the values: `language`, `framework`, `test_framework`, `build_tool`, `ui`, and the comma-separated `skills_to_consider` list.
-3. Discover installed skills by listing each of these directories (some may not exist; that's OK):
-   ```
-   .opencode/skills/                         # OpenCode-style, project scope
-   .agents/skills/                           # Skills CLI, project scope
-   ~/.config/opencode/skills/                # OpenCode-style, global scope
-   ~/.claude/skills/                         # Claude Code, auto-loaded global
-   ~/.agents/skills/                         # Skills CLI, auto-loaded global
-   ```
-4. Match installed skills against the stack, in order of specificity (most specific first):
+
+### Key principle: lazy loading
+
+**Do NOT eagerly load every matched SKILL.md into your context at this step.** Loading a skill pulls its entire content (often 1–2K tokens) into your prompt for the rest of the turn. The cost is real and compounds across tool calls. A task that loads 4 skills upfront pays 4–8K extra tokens **per tool call** for the duration of the turn — even when most steps don't need those skills.
+
+**Skill loading rule** — Load a `SKILL.md` only when you are **about to implement code that directly depends on its domain**:
+
+| You are about to… | Load this skill |
+|--------------------|------------------|
+| Write Tailwind class strings | `tailwind-best-practices` (or equivalent) |
+| Write a Vitest / Jest spec | the test-framework skill |
+| Write a React component | `react-best-practices` |
+| Write an Astro page or component shell | `astro` |
+| Audit UI for design tokens / antipatterns | `impeccable` or `frontend-design` |
+
+If a plan step doesn't touch a skill's domain, **do not load** its SKILL.md for that step.
+
+Many tasks only end up loading 1–2 skills total even when `skills_to_consider` lists 4–5. That's the desired outcome: less context, less latency, fewer subtle errors from competing rules.
+
+### 3. **Discover installed skills — local first, then global, stop early.**
+
+   Search directories in this strict order of precedence. **As soon as you find a skill matching the stack in one scope, do NOT keep searching for the same skill in lower-precedence scopes.**
+
+   | Precedence | Path | Scope |
+   |-----------:|------|-------|
+   | 1 (highest) | `.opencode/skills/` | Project — OpenCode-style |
+   | 2 | `.agents/skills/` | Project — Skills CLI |
+   | 3 | `~/.config/opencode/skills/` | Global — OpenCode-style |
+   | 4 | `~/.claude/skills/` | Global — Claude Code |
+   | 5 (lowest) | `~/.agents/skills/` | Global — Skills CLI |
+
+   **Algorithm**:
+   - For each candidate skill name (from `skills_to_consider`, plus pattern matches like `<language>-*`, `<framework>-*`):
+     1. Check `.opencode/skills/<name>/SKILL.md` — if found, load it and continue to the next candidate.
+     2. If not, check `.agents/skills/<name>/SKILL.md` — same.
+     3. Only if neither of the project-scope paths has it, check the global paths in order (3 → 4 → 5).
+     4. Stop at the first hit per candidate.
+
+   **Use existence-checking commands that don't error noisily** when a directory is missing:
+   - PowerShell: `Test-Path -LiteralPath ".opencode/skills/react-best-practices/SKILL.md"`
+   - bash: `[ -f ".opencode/skills/react-best-practices/SKILL.md" ] && echo found`
+
+   Avoid `Read` / `Get-Content` / `ls` on paths you haven't first confirmed exist — those throw "File not found" errors that clutter the output and waste tokens.
+
+   **If a global path doesn't exist on this machine** (e.g., user never installed `~/.claude/`), skip it silently — don't even attempt to read it.
+
+4. **Match installed skills against the stack**, in order of specificity (most specific first):
    - **Exact match** against `skills_to_consider` (e.g., `react-best-practices`).
    - **Prefix match**: `<language>-*` (e.g., `typescript-advanced-types`).
    - **Suffix match**: `*-<language>` (e.g., `vercel-react-best-practices` matches `react`).
    - **Framework match**: `<framework>-*` (e.g., `nextjs-app-router`).
    - **Tool match**: exact name of `test_framework`, `build_tool`, `ui` (e.g., `vitest`, `tailwind-best-practices`).
-5. For each matched skill, read its `SKILL.md` to load its rules into your working context.
+
+5. **Build a discovery map** — a mental (or tool-side) table of "skill name → path of its SKILL.md". Do NOT read the SKILL.md content yet. Just record where each one lives. Example:
+
+   | Skill | Path | Loaded? |
+   |-------|------|---------|
+   | `astro` | `.opencode/skills/astro/SKILL.md` | No (load when writing Astro code) |
+   | `tailwind-best-practices` | `.agents/skills/tailwind-best-practices/SKILL.md` | No (load when writing classes) |
+   | `react-best-practices` | `~/.config/opencode/skills/react-best-practices/SKILL.md` | No |
+
+6. **Later, when you're about to implement a step**, decide which skills apply and `Read` their `SKILL.md` JUST-IN-TIME. After applying the skill's rules to that step, the content stays in your context until end-of-turn — that's unavoidable, but at least you only paid the cost for skills you actually used.
 
 ### Priority of rules when conflicts exist
 
@@ -161,21 +208,29 @@ Apply matched-skill rules with **priority over the generic code-quality rules** 
 
 ### Mandatory section in `implementation.md`
 
-Document which skills you applied (or none) in `implementation.md`:
+Document **which skills you actually loaded** vs which you only discovered (and chose not to load):
 
 ```markdown
-## Skills applied
-- `typescript-advanced-types` (from `.agents/skills/`)
-- `react-best-practices` (from `.opencode/skills/`)
-- `vitest` (from `.agents/skills/`)
+## Skills loaded
+- `tailwind-best-practices` (from `.agents/skills/`, loaded at step 3 — needed for modal classes)
+- `astro` (from `.opencode/skills/`, loaded at step 1 — component shell)
+
+## Skills available but not loaded
+- `frontend-design` (discovered, not needed for this task)
+- `impeccable` (discovered, not needed — task is bug fix, not visual audit)
 ```
 
-If you matched no skills (none installed, or stack marked `unknown`), write:
+If you matched and loaded no skills (none installed, or none needed for this task), write:
 
 ```markdown
-## Skills applied
-None matched for this task's stack. Used the generic rules of the Programmer prompt as the only guidance.
+## Skills loaded
+None — used the generic rules of the Programmer prompt as the only guidance.
+
+## Skills available but not loaded
+- (list any skills discovered but skipped)
 ```
+
+**Why two sections**: makes the lazy-loading discipline auditable. A reviewer can see what was available and what cost (in tokens / context) you actually paid.
 
 ### Failure mode
 
@@ -289,10 +344,13 @@ You write to `vault/memory/tasks/<slug>/implementation.md` with the structure be
 ```markdown
 # Implementation — <slug>
 
-## Skills applied
-- `typescript-advanced-types` (from `.agents/skills/`)
-- `react-best-practices` (from `.opencode/skills/`)
-- `vitest` (from `.agents/skills/`)
+## Skills loaded
+- `tailwind-best-practices` (from `.agents/skills/`, loaded at step 3 — modal classes)
+- `react-best-practices` (from `.opencode/skills/`, loaded at step 1 — component patterns)
+
+## Skills available but not loaded
+- `vitest` (discovered, not needed — no tests in this PR)
+- `frontend-design` (discovered, not relevant for this fix)
 
 ## Steps completed
 - [x] **1.** Create `src/pages/Login.tsx` with email+password form

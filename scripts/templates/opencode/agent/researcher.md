@@ -236,7 +236,42 @@ If `research.md` already exists in `vault/memory/tasks/<slug>/`:
 
 ## Available skills (opt-in — use them when applicable)
 
-OpenCode auto-discovers skills installed under `.opencode/skills/` and `.agents/skills/` of the project. **You do not invoke them by inertia** — use them when the task domain matches what the skill provides.
+### Lazy loading discipline
+
+**Do NOT eagerly load every skill found in the search directories.** Each loaded SKILL.md adds 1–2K tokens to your prompt for the rest of the turn — across every subsequent tool call. The cost is real and compounds.
+
+Skill discovery is "is the file there?" — that's cheap (use existence-check, not `Read`).
+Skill loading is "read the SKILL.md content" — that's the costly step. Only do it when the task domain matches.
+
+**Use `Test-Path` (PowerShell) or `[ -f ]` (bash) to check existence — NOT `Read` / `Get-Content`:**
+
+```powershell
+# PowerShell — cheap, no error noise:
+Test-Path -LiteralPath ".opencode/skills/impeccable/SKILL.md"
+Test-Path -LiteralPath ".agents/skills/obsidian-markdown/SKILL.md"
+```
+
+```bash
+# bash — cheap, no error noise:
+[ -f ".opencode/skills/impeccable/SKILL.md" ] && echo found
+[ -f ".agents/skills/obsidian-markdown/SKILL.md" ] && echo found
+```
+
+**Avoid** `Read C:\Users\X\.config\opencode\skills` or `ls $HOME/.claude/skills` — these throw "File not found" / "ENOENT" when the directory is missing, cluttering the output and wasting tokens.
+
+### Search order (local first, stop early)
+
+| Precedence | Path | Scope |
+|-----------:|------|-------|
+| 1 (highest) | `.opencode/skills/` | Project — OpenCode |
+| 2 | `.agents/skills/` | Project — Skills CLI |
+| 3 | `~/.config/opencode/skills/` | Global — OpenCode |
+| 4 | `~/.claude/skills/` | Global — Claude Code |
+| 5 (lowest) | `~/.agents/skills/` | Global — Skills CLI |
+
+**For each candidate skill**, check paths in this order. **As soon as you find it in one scope, stop.** Don't check lower-precedence paths.
+
+OpenCode auto-discovers `SKILL.md` from `.opencode/skills/` and `.agents/skills/`. **You do not invoke them by inertia** — load them when the task domain matches what the skill provides.
 
 ### `impeccable` — UI / design research
 
@@ -251,8 +286,8 @@ If installed (`.opencode/skills/impeccable/SKILL.md` exists), it provides design
 
 **How to use it** (concrete):
 
-1. Verify presence with `ls .opencode/skills/impeccable/SKILL.md` before citing it in `research.md`.
-2. Read `SKILL.md` and the files referenced under `.opencode/skills/impeccable/reference/` to align the vocabulary and anti-patterns you will apply.
+1. Verify presence with `Test-Path -LiteralPath ".opencode/skills/impeccable/SKILL.md"` (PowerShell) or `[ -f .opencode/skills/impeccable/SKILL.md ]` (bash) before citing it.
+2. **Only if the file exists AND the task domain is UI/design**, load `SKILL.md` and the files referenced under `.opencode/skills/impeccable/reference/`. Skip the read for tasks where impeccable doesn't apply (backend pure, testing, infra) — it would only add tokens to your context without benefit.
 3. In `research.md`, add a dedicated section when the domain applies:
 
 ```markdown
