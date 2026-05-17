@@ -2324,29 +2324,37 @@ async function verifyMemoryDepsInstalled() {
 }
 
 // Ejecuta el comando de install hasta que tenga éxito o el usuario cancele.
-// Devuelve true si las dependencias quedaron utilizables (verificadas en
-// node_modules), false si el usuario abandonó.
+// Detecta errores comunes (ERESOLVE de NPM) y ofrece flags específicas
+// (--legacy-peer-deps, --force) en el menú de reintento.
 async function installMemoryDepsWithRetry(pm, depList) {
-  const installCmd = pm === 'yarn' ? 'add'
-                    : pm === 'pnpm' ? 'add'
-                    : pm === 'bun'  ? 'add'
-                    : 'install';
+  let currentPm = pm;
+  let extraFlags = [];
+
+  const installCmdFor = (m) => m === 'yarn' ? 'add'
+                              : m === 'pnpm' ? 'add'
+                              : m === 'bun' ? 'add'
+                              : 'install';
 
   for (let attempt = 1; attempt <= 5; attempt++) {
     if (attempt > 1) {
       console.log('');
-      console.log(dim(`  Reintento ${attempt - 1}/4...`));
+      const flagsStr = extraFlags.length ? ' ' + extraFlags.join(' ') : '';
+      console.log(dim(`  Reintento ${attempt - 1}/4 con ${currentPm}${flagsStr}...`));
     }
 
+    const installCmd = installCmdFor(currentPm);
+    const args = [installCmd, ...depList, ...extraFlags];
+    const label = `Instalar deps (${currentPm}${extraFlags.length ? ' ' + extraFlags.join(' ') : ''})`;
+
     rl.pause();
-    const exitCode = await runChild(pm, [installCmd, ...depList], `Instalar deps (${pm})`);
+    const exitCode = await runChild(currentPm, args, label);
 
     const verify = await verifyMemoryDepsInstalled();
 
     if (verify.ok) {
       if (exitCode !== 0) {
         console.log('');
-        console.log(yellow(`  ⚠ ${pm} retornó exit code ${exitCode} pero los paquetes están en node_modules.`));
+        console.log(yellow(`  ⚠ ${currentPm} retornó exit code ${exitCode} pero los paquetes están en node_modules.`));
         console.log(dim('    Probablemente warnings de subdependencias deprecadas o de scripts opcionales.'));
         console.log(dim('    Continuamos — los paquetes principales están utilizables.'));
       }
@@ -2356,33 +2364,53 @@ async function installMemoryDepsWithRetry(pm, depList) {
     // Falló y faltan paquetes
     console.log('');
     console.log(red(`  ✗ Faltan paquetes en node_modules: ${verify.missing.join(', ')}`));
-    console.log(dim('    Exit code de ' + pm + ': ' + exitCode));
+    console.log(dim('    Exit code de ' + currentPm + ': ' + exitCode));
     console.log('');
     console.log('  ' + bold('Causas comunes:'));
+    console.log('    ' + dim('· ') + yellow('Conflicto de peer dependencies (npm error ERESOLVE)') + dim(' — típico en proyectos NestJS/Angular.'));
+    console.log('    ' + dim('  Fix: usar ') + cyan('--legacy-peer-deps') + dim(' (NPM lo sugiere en su propio output).'));
     console.log('    ' + dim('· Red/firewall bloqueando descarga de binarios nativos (onnxruntime).'));
     console.log('    ' + dim('· Antivirus interceptando archivos durante la descarga.'));
     console.log('    ' + dim('· Mirror de npm/pnpm temporal con problemas.'));
     console.log('    ' + dim('· Espacio en disco insuficiente (los paquetes pesan ~50-80 MB).'));
     console.log('');
 
-    const choice = await tuiSelect(
-      '\n¿Qué hacés?',
-      [
-        `Reintentar con ${pm}`,
-        'Reintentar con npm (en caso de bug específico de ' + pm + ')',
+    // Opciones del menú dependen del package manager actual.
+    let options, handlers;
+    if (currentPm === 'npm') {
+      options = [
+        'Reintentar con npm ' + green('--legacy-peer-deps') + dim('  (recomendado para ERESOLVE)'),
+        'Reintentar con npm ' + yellow('--force') + dim('  (más agresivo, último recurso)'),
+        'Reintentar con npm (sin flags adicionales)',
         'Cancelar instalación de Memory',
-      ],
-      0,
-    );
+      ];
+      handlers = [
+        () => { extraFlags = ['--legacy-peer-deps']; },
+        () => { extraFlags = ['--force']; },
+        () => { extraFlags = []; },
+        null, // cancel
+      ];
+    } else {
+      options = [
+        `Reintentar con ${currentPm} (sin cambios)`,
+        'Cambiar a npm + ' + green('--legacy-peer-deps') + dim('  (recomendado para ERESOLVE)'),
+        'Cambiar a npm (sin flags)',
+        'Cancelar instalación de Memory',
+      ];
+      handlers = [
+        () => { extraFlags = []; },
+        () => { currentPm = 'npm'; extraFlags = ['--legacy-peer-deps']; },
+        () => { currentPm = 'npm'; extraFlags = []; },
+        null,
+      ];
+    }
 
-    if (choice.index === 2) {
+    const choice = await tuiSelect('\n¿Qué hacés?', options, 0);
+    const handler = handlers[choice.index];
+    if (!handler) {
       return { ok: false, exitCode, missing: verify.missing };
     }
-    if (choice.index === 1) {
-      pm = 'npm';
-      // Reintenta el loop con npm
-    }
-    // index === 0 → reintenta con el mismo pm
+    handler();
   }
 
   return { ok: false, exitCode: -1, missing: ['(retries exhausted)'] };
