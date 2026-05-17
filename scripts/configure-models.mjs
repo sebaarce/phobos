@@ -1175,16 +1175,37 @@ function renderSuggestionPanel(recommended, current) {
   panel('Sugerencia automática', lines);
 }
 
-async function chooseMode(allModels, current) {
+// chooseMode — Step 3 del wizard. Recibe `history` mutable: cada sub-decisión
+// agrega una línea al historial superior y limpia la pantalla en el siguiente sub-step.
+async function chooseMode(history, allModels, current) {
   const detectedProviders = Array.from(new Set(allModels.map(m => getProvider(m)))).sort();
   const hasMultipleProviders = detectedProviders.length > 1;
 
   // OpenCode usa un solo proveedor por sesión — siempre elegimos uno (no hay opción "todos")
   let providerFilter = detectedProviders[0];
 
+  // Helper: si ya existe una entry con ese label, la reemplaza; si no, la agrega.
+  function setHistoryEntry(label, value) {
+    const existing = history.findIndex(h => h.label === label);
+    if (existing >= 0) history[existing] = { label, value };
+    else history.push({ label, value });
+  }
+
+  // Helper: quita todas las entries posteriores a (e incluyendo) un label.
+  // Útil cuando volvemos al sub-step A desde "Cambiar proveedor".
+  function trimHistoryFrom(label) {
+    const idx = history.findIndex(h => h.label === label);
+    if (idx >= 0) history.splice(idx);
+  }
+
   while (true) {
-    // Paso A: elegir provider (solo si hay más de uno)
+    // ─── Sub-step 3a: elegir provider (si hay múltiples) ─────────────
     if (hasMultipleProviders) {
+      // Si venimos de un loop ("Cambiar proveedor"), borrar entries posteriores
+      trimHistoryFrom('Estrategia');
+
+      renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir proveedor');
+
       const providerOptions = detectedProviders.map(p => {
         const count = allModels.filter(m => getProvider(m) === p).length;
         return `${p} (${count} modelos)`;
@@ -1199,9 +1220,17 @@ async function chooseMode(allModels, current) {
       );
 
       providerFilter = detectedProviders[provIdx];
+      const count = allModels.filter(m => getProvider(m) === providerFilter).length;
+      setHistoryEntry('Provider', `${providerFilter} (${count} modelos)`);
+    } else {
+      // Solo un provider — registramos sin preguntar
+      const count = allModels.filter(m => getProvider(m) === providerFilter).length;
+      setHistoryEntry('Provider', `${providerFilter} (${count} modelos) — único disponible`);
     }
 
-    // Paso B: calcular y mostrar la sugerencia filtrada al provider elegido
+    // ─── Sub-step 3b: mostrar sugerencia + elegir estrategia ─────────
+    renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir estrategia');
+
     const modelsScope = allModels.filter(m => getProvider(m) === providerFilter);
 
     const recommended = Object.fromEntries(
@@ -1211,7 +1240,6 @@ async function chooseMode(allModels, current) {
     console.log('');
     renderSuggestionPanel(recommended, current);
 
-    // Paso C: elegir modo de asignación
     const modeOptions = [
       'Aplicar la sugerencia automática',
       'Asignar el MISMO modelo a todos (preset uniforme)',
@@ -1228,18 +1256,30 @@ async function chooseMode(allModels, current) {
       0,
     );
 
-    if (index === 0) return recommended;
+    if (index === 0) {
+      setHistoryEntry('Estrategia', 'Aplicar sugerencia automática');
+      return recommended;
+    }
 
     if (index === 1) {
+      setHistoryEntry('Estrategia', 'Mismo modelo para TODOS los agentes');
+      renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir modelo uniforme');
       const uniformPrompt = '  ' + bold(cyan('Modelo para TODOS los agentes')) + '\n   ' + dim('actual:  ' + current.phobos);
       const m = await pickFromList(modelsScope, uniformPrompt, current.phobos);
+      setHistoryEntry('Modelo uniforme', m);
       return Object.fromEntries(AGENTS.map(a => [a, m]));
     }
 
     if (index === 2) {
+      setHistoryEntry('Estrategia', 'Custom — agente por agente');
       const target = {};
       for (let i = 0; i < AGENTS.length; i++) {
         const agent = AGENTS[i];
+        renderWizardStep(
+          printModelsBanner,
+          history,
+          `[3/4] Asignar modelo · agente ${i + 1}/${AGENTS.length}: ${agent}`,
+        );
         const prompt = agentHeaderBlock(
           i, AGENTS.length, agent,
           AGENT_PROFILES[agent].role,
@@ -1247,16 +1287,17 @@ async function chooseMode(allModels, current) {
           recommended[agent],
         );
         target[agent] = await pickFromList(modelsScope, prompt, current[agent]);
+        setHistoryEntry(`  · ${agent}`, target[agent]);
       }
       return target;
     }
 
-    // "Cambiar proveedor" — solo si hay múltiples; loop back al paso A
+    // "Cambiar proveedor" — solo si hay múltiples; loop back al sub-step 3a
     if (hasMultipleProviders && index === 3) {
       continue;
     }
 
-    // Cancelar
+    // Cancelar y salir
     return null;
   }
 }
@@ -1787,9 +1828,11 @@ async function actionSetModels(agentDir) {
   });
 
   // ─── Step 3/4: Asignar modelo a cada agente ────────────────────────
-  renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo a cada agente');
+  //   (chooseMode hace su propio renderWizardStep antes de cada sub-pregunta
+  //    y va agregando entries al historial: Provider, Estrategia, y por agente
+  //    si se eligió custom)
   const current = await readCurrentModels(agentDir);
-  const target = await chooseMode(allModels, current);
+  const target = await chooseMode(history, allModels, current);
   if (!target) {
     history.push({ label: 'Asignación', value: 'Cancelado por el usuario' });
     renderWizardStep(printModelsBanner, history, '');
@@ -1798,12 +1841,6 @@ async function actionSetModels(agentDir) {
     return;
   }
   const agentsToChange = AGENTS.filter(a => current[a] !== target[a]);
-  history.push({
-    label: 'Asignación',
-    value: agentsToChange.length > 0
-      ? `${agentsToChange.length}/${AGENTS.length} agentes con cambios pendientes`
-      : `Todos los agentes ya tenían el modelo deseado`,
-  });
 
   // ─── Step 4/4: Aplicar cambios ─────────────────────────────────────
   renderWizardStep(printModelsBanner, history, '[4/4] Aplicar cambios');
