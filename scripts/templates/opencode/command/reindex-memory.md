@@ -38,10 +38,18 @@ Y terminá ahí — no avances al paso 2.
 
 ### Paso 2 — Verificar que Qdrant esté corriendo
 
-Probá un health check rápido:
+Probá un health check rápido. **Detectá el shell antes**: si estás en Windows PowerShell, usá `Invoke-WebRequest`; en bash/zsh usá `curl`.
+
+**Bash / zsh / Git Bash**:
 
 ```bash
 curl -sf http://localhost:6333/healthz -o /dev/null && echo "qdrant-ok" || echo "qdrant-down"
+```
+
+**Windows PowerShell**:
+
+```powershell
+try { Invoke-WebRequest -Uri "http://localhost:6333/healthz" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop | Out-Null; "qdrant-ok" } catch { "qdrant-down" }
 ```
 
 Si la salida es `qdrant-down`, decile al usuario:
@@ -102,6 +110,37 @@ Ejemplo de error si el script salió con código != 0:
 > ⚠️ El reindex falló con código N. Output relevante:
 > `<últimas 3-5 líneas del stderr>`
 > Probables causas: Qdrant cayó durante el proceso, espacio en disco, o un archivo del vault corrupto.
+
+### Caso especial — `Unauthorized` / 401 / "API key"
+
+Si el script imprime `[memory] fatal: Unauthorized` (o cualquier error con `401` o "api key"), Qdrant está corriendo pero está en modo auth y el cliente JS no le pasa la API key.
+
+**No es que necesites una API key** — el setup de Phobos es **sin auth**. La causa es que tu `~/.phobos/docker-compose.qdrant.yml` tiene una línea vieja del template:
+
+```yaml
+environment:
+  QDRANT__SERVICE__API_KEY: ""   # ← esta línea habilita auth con key vacía
+```
+
+Decile al usuario, en español, algo equivalente a:
+
+> ⚠️ Qdrant está corriendo pero rechaza con `Unauthorized`. Es un bug del template viejo. Para arreglarlo:
+>
+> 1. Bajá Qdrant:
+>    ```bash
+>    docker compose -f ~/.phobos/docker-compose.qdrant.yml down
+>    ```
+> 2. Borrá el compose viejo (NO el storage, no perdés data):
+>    ```bash
+>    rm ~/.phobos/docker-compose.qdrant.yml
+>    ```
+> 3. Re-corré el wizard de Phobos:
+>    ```bash
+>    npx github:sebaarce/phobos
+>    ```
+>    → Menú principal → "Memory (RAG)" → el step 5 detecta que falta el compose y lo regenera con la versión nueva (sin la línea problemática). Levanta Qdrant. Indexa.
+>
+> Alternativa rápida (si no querés correr el wizard): editá `~/.phobos/docker-compose.qdrant.yml` y BORRÁ la línea `QDRANT__SERVICE__API_KEY: ""`. Después `docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d --force-recreate`.
 
 ## Lo que NO hacés en este comando
 

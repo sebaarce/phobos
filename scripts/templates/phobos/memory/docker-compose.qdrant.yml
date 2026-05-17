@@ -9,8 +9,11 @@ services:
     volumes:
       - ./.qdrant_storage:/qdrant/storage
     environment:
-      QDRANT__SERVICE__API_KEY: ""              # local-only, no auth
       QDRANT__LOG_LEVEL: "INFO"
+    # IMPORTANTE: NO setear QDRANT__SERVICE__API_KEY (ni siquiera vacío "").
+    # En algunas versiones de Qdrant un string vacío se interpreta como
+    # "habilitar auth con key vacía" y rechaza todos los requests sin header
+    # api-key con 401 Unauthorized. Para deshabilitar auth, no setear la var.
     healthcheck:
       test: ["CMD-SHELL", "bash -lc 'cat < /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 10s

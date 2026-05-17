@@ -2372,6 +2372,7 @@ async function actionInstallMemory() {
     : qdrant.containerRunning ? yellow('⚠ contenedor up pero sin responder a /healthz aún')
     : dim('— no está corriendo (se levantará en el paso 5)')
   ));
+  console.log('  ' + dim('Dashboard:     ') + cyan(QDRANT_URL + '/dashboard'));
   console.log('  ' + dim('Package manager: ') + cyan(pm));
   console.log('  ' + dim('Collection name: ') + cyan(collectionName));
   console.log('  ' + dim('Global compose: ') + cyan(QDRANT_COMPOSE_GLOBAL));
