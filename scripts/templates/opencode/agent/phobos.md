@@ -25,6 +25,8 @@ permission:
     "git add*": deny
     "git commit*": deny
     "git push*": deny
+    "node vault/memory/.engine/*": allow
+    "curl -sf http://localhost:6333/*": allow
   task:
     "*": deny
     researcher: allow

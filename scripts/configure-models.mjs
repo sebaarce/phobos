@@ -50,6 +50,7 @@ const BOOTSTRAP_GROUPS = {
   comandos: [
     'opencode/command/adapt-agents.md',
     'opencode/command/models-wizard.md',
+    'opencode/command/reindex-memory.md',
   ],
   vault: [
     'vault/SCHEMA.md',
@@ -1440,6 +1441,7 @@ async function bootstrap(missing) {
 // ═══════════════════════════════════════════════════════════════════
 
 const TRACKED_AGENT_FILES = [
+  // Agents
   { src: 'opencode/agent/phobos.md',     dst: '.opencode/agent/phobos.md',     ignoreModel: true  },
   { src: 'opencode/agent/researcher.md', dst: '.opencode/agent/researcher.md', ignoreModel: true  },
   { src: 'opencode/agent/planner.md',    dst: '.opencode/agent/planner.md',    ignoreModel: true  },
@@ -1447,6 +1449,10 @@ const TRACKED_AGENT_FILES = [
   { src: 'opencode/agent/tester.md',     dst: '.opencode/agent/tester.md',     ignoreModel: true  },
   { src: 'opencode/agent/archivist.md',  dst: '.opencode/agent/archivist.md',  ignoreModel: true  },
   { src: 'opencode/agent/README.md',     dst: '.opencode/agent/README.md',     ignoreModel: false },
+  // Slash commands
+  { src: 'opencode/command/adapt-agents.md',   dst: '.opencode/command/adapt-agents.md',   ignoreModel: false },
+  { src: 'opencode/command/models-wizard.md',  dst: '.opencode/command/models-wizard.md',  ignoreModel: false },
+  { src: 'opencode/command/reindex-memory.md', dst: '.opencode/command/reindex-memory.md', ignoreModel: false },
 ];
 
 function normalizeIgnoringModel(content) {
