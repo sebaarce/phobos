@@ -43,7 +43,6 @@ export const BOOTSTRAP_GROUPS = {
     'opencode/agent/programmer.md',
     'opencode/agent/tester.md',
     'opencode/agent/archivist.md',
-    'opencode/agent/README.md',
   ],
   comandos: [
     'opencode/command/adapt-agents.md',

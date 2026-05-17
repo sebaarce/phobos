@@ -18,7 +18,6 @@ export const TRACKED_AGENT_FILES = [
   { src: 'opencode/agent/programmer.md', dst: '.opencode/agent/programmer.md', ignoreModel: true  },
   { src: 'opencode/agent/tester.md',     dst: '.opencode/agent/tester.md',     ignoreModel: true  },
   { src: 'opencode/agent/archivist.md',  dst: '.opencode/agent/archivist.md',  ignoreModel: true  },
-  { src: 'opencode/agent/README.md',     dst: '.opencode/agent/README.md',     ignoreModel: false },
   // Slash commands
   { src: 'opencode/command/adapt-agents.md',   dst: '.opencode/command/adapt-agents.md',   ignoreModel: false },
   { src: 'opencode/command/models-wizard.md',  dst: '.opencode/command/models-wizard.md',  ignoreModel: false },
