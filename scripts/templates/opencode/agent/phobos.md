@@ -30,6 +30,9 @@ permission:
     "Get-Item *": allow
     "Resolve-Path *": allow
     "Test-Path *": allow
+    # Timestamps (read-only, sin side effects) — para trazabilidad
+    "date *": allow
+    "Get-Date *": allow
     # Git read-only
     "git status": allow
     "git diff*": allow

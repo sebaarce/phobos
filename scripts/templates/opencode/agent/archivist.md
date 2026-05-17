@@ -24,6 +24,8 @@ permission:
     "rg*": allow
     "Select-String*": allow
     "find*": allow
+    "date*": allow
+    "Get-Date*": allow
     "node vault/memory/.engine/*": allow
     "npx*": allow
 security:
@@ -337,6 +339,13 @@ Every file you write or edit **replaces** the HTML comment line with the current
 ```
 <!-- Traceability: <what you did> by Archivist at YYYY-MM-DD HH:MM:SS -->
 ```
+
+**To get the current timestamp**, run ONE of:
+
+- PowerShell / Windows:  `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
+- bash / Unix / macOS:   `date "+%Y-%m-%d %H:%M:%S"`
+
+Do NOT use `npx node -e "..."` or cross-shell hacks — quoting conflicts between PowerShell and bash cause multiple failed retries and burn tokens unnecessarily.
 
 If you re-run (plan change, fix), **replace**, do not accumulate.
 
