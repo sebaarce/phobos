@@ -98,6 +98,30 @@ Parse the JSON output (an array of `{score, filePath, sectionTitle, text}`). Use
 
 > Memory engine not installed in this project. Phobos may want to run `npx github:sebaarce/phobos` → "Memory (RAG)" so future tasks have semantic recall over the vault.
 
+## Memory binding (where your semantic memory lives)
+
+The Qdrant collection your project uses is **NOT** hardcoded in this prompt. It is configured per-project in:
+
+```
+vault/memory/.engine/config.json  →  qdrant.collection
+```
+
+`search.mjs` and `index-vault.mjs` read that field automatically — you don't need to know the collection name to use them. The binding is by **file path**: this prompt's project has its own `config.json`, and other projects have theirs, isolated.
+
+**If the user asks you "which memory are you using?"**, you can answer by reading the config:
+
+```bash
+# bash/Git Bash
+cat vault/memory/.engine/config.json | grep collection
+
+# PowerShell
+Get-Content vault/memory/.engine/config.json | Select-String collection
+```
+
+You'll see something like `"collection": "phobos-vault-<project-slug>"`. That is the Qdrant collection you are searching in.
+
+**Do not invent or hardcode a collection name** in your responses. Always read from the config when needed.
+
 **If the engine is installed but Qdrant is unreachable** (search.mjs exits non-zero), write the section with the literal note:
 
 ```markdown

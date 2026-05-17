@@ -249,6 +249,17 @@ Change `Status:` to `done` / `partial` / `abandoned`. Replace the traceability w
 
 #### 4g. Trigger semantic re-index (memory engine)
 
+**Memory binding** — the Qdrant collection your project uses is configured per-project in `vault/memory/.engine/config.json` (field `qdrant.collection`). `index-vault.mjs` reads it automatically — you don't need to know the collection name to invoke it. The binding is by file path: this project has its own `config.json`, other projects have theirs, fully isolated.
+
+If the user asks "which collection are you indexing into?", read it from the config:
+
+```bash
+cat vault/memory/.engine/config.json | grep collection   # bash
+Get-Content vault/memory/.engine/config.json | Select-String collection   # PowerShell
+```
+
+Do not invent or hardcode a collection name. Always read from the config when needed.
+
 If the memory engine is installed, run the incremental indexer so the next task's Researcher pre-flight sees the new insights/wiki/glossary you just wrote.
 
 ```bash
