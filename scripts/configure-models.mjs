@@ -2309,6 +2309,49 @@ async function detectPackageManager() {
   return 'npm';
 }
 
+// Detecta stacks que históricamente requieren --legacy-peer-deps con NPM v7+
+// (conflictos de peer dependencies habituales).
+async function detectProblematicStack() {
+  const pkg = await readPackageJson();
+  if (!pkg) return [];
+  const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  const indicators = [
+    { stack: 'NestJS',       test: () => Object.keys(allDeps).some(k => k.startsWith('@nestjs/')) },
+    { stack: 'Angular',      test: () => Object.keys(allDeps).some(k => k.startsWith('@angular/')) },
+    { stack: 'Next.js',      test: () => 'next' in allDeps },
+    { stack: 'React Native', test: () => 'react-native' in allDeps },
+  ];
+  return indicators.filter(i => i.test()).map(i => i.stack);
+}
+
+// Lee el .npmrc del proyecto y devuelve true si tiene legacy-peer-deps habilitado.
+async function checkNpmrcHasLegacyPeerDeps() {
+  try {
+    const content = await readFile(join(cwd(), '.npmrc'), 'utf-8');
+    return /^\s*legacy-peer-deps\s*=\s*true/im.test(content);
+  } catch {
+    return false;
+  }
+}
+
+// Persiste legacy-peer-deps=true en el .npmrc del proyecto (idempotente).
+async function addLegacyPeerDepsToNpmrc() {
+  const npmrcPath = join(cwd(), '.npmrc');
+  let existing = '';
+  try {
+    existing = await readFile(npmrcPath, 'utf-8');
+  } catch {}
+  if (/^\s*legacy-peer-deps\s*=\s*true/im.test(existing)) {
+    return { added: false, reason: 'ya estaba' };
+  }
+  const snippet = '# Phobos Memory installer — NestJS/Angular peer-deps fix\nlegacy-peer-deps=true\n';
+  const content = existing.trim()
+    ? existing.trim() + '\n\n' + snippet
+    : snippet;
+  await writeFile(npmrcPath, content);
+  return { added: true };
+}
+
 // Verifica si los paquetes de Memory están realmente presentes en node_modules.
 // Lo usamos como segunda señal después del install — pnpm/npm pueden retornar
 // exit code != 0 por warnings o por descargas parciales pero igual dejar los
@@ -2326,9 +2369,9 @@ async function verifyMemoryDepsInstalled() {
 // Ejecuta el comando de install hasta que tenga éxito o el usuario cancele.
 // Detecta errores comunes (ERESOLVE de NPM) y ofrece flags específicas
 // (--legacy-peer-deps, --force) en el menú de reintento.
-async function installMemoryDepsWithRetry(pm, depList) {
+async function installMemoryDepsWithRetry(pm, depList, initialFlags = []) {
   let currentPm = pm;
-  let extraFlags = [];
+  let extraFlags = [...initialFlags];
 
   const installCmdFor = (m) => m === 'yarn' ? 'add'
                               : m === 'pnpm' ? 'add'
@@ -2358,7 +2401,7 @@ async function installMemoryDepsWithRetry(pm, depList) {
         console.log(dim('    Probablemente warnings de subdependencias deprecadas o de scripts opcionales.'));
         console.log(dim('    Continuamos — los paquetes principales están utilizables.'));
       }
-      return { ok: true, exitCode };
+      return { ok: true, exitCode, usedFlags: [...extraFlags], usedPm: currentPm };
     }
 
     // Falló y faltan paquetes
@@ -3044,6 +3087,8 @@ async function actionInstallMemory() {
   const collectionName = projectCollectionSlug();
   const agentSupport = await detectAgentsHaveMemorySupport();
   const agentsReady = agentSupport.researcherOK && agentSupport.archivistOK;
+  const problemStacks = await detectProblematicStack();
+  const npmrcHasFlag = await checkNpmrcHasLegacyPeerDeps();
 
   console.log('  ' + dim('Qdrant global: ') + (
     qdrant.containerRunning && qdrant.healthy ? green('✓ corriendo y healthy en ' + QDRANT_URL)
@@ -3051,6 +3096,13 @@ async function actionInstallMemory() {
     : dim('— no está corriendo (se levantará en el paso 5)')
   ));
   console.log('  ' + dim('Package manager: ') + cyan(pm));
+  console.log('  ' + dim('Stack detectado: ')
+    + (problemStacks.length > 0
+        ? yellow(problemStacks.join(', ') + ' — suele requerir --legacy-peer-deps')
+        : dim('sin stacks con issues conocidos de peer-deps')));
+  if (problemStacks.length > 0 && npmrcHasFlag) {
+    console.log('  ' + dim('  .npmrc del proyecto ya tiene ') + green('legacy-peer-deps=true') + dim(' ✓'));
+  }
   console.log('  ' + dim('Collection name: ') + cyan(collectionName));
   console.log('  ' + dim('Global compose: ') + cyan(QDRANT_COMPOSE_GLOBAL));
   console.log('  ' + dim('Agentes preparados para Memory: ')
@@ -3119,28 +3171,91 @@ async function actionInstallMemory() {
   // Pre-check: si las deps ya estaban instaladas (re-run del wizard), saltamos
   const preCheck = await verifyMemoryDepsInstalled();
   let installSummary;
+  let usedLegacyPeerDeps = false;
+
   if (preCheck.ok) {
     console.log('');
     console.log('  ' + green('✓ Ambos paquetes ya están en node_modules — salteando install.'));
     installSummary = `Ya instalados (reusados de instalación previa)`;
   } else {
-    const result = await installMemoryDepsWithRetry(pm, depList);
+    // Si detectamos stack problemático + npm + sin flag persistida → preguntar
+    // si arrancar el install con --legacy-peer-deps desde el primer intento.
+    let initialFlags = [];
+    if (problemStacks.length > 0 && pm === 'npm' && !npmrcHasFlag) {
+      console.log('');
+      console.log('  ' + yellow('⚠ Detecté ') + bold(problemStacks.join(', '))
+        + yellow(' en el proyecto.'));
+      console.log('  ' + dim('   Estos stacks suelen tener conflictos de peer dependencies (ERESOLVE)'));
+      console.log('  ' + dim('   en NPM v7+. La flag ') + cyan('--legacy-peer-deps')
+        + dim(' soluciona esto sin tocar tu árbol de deps.'));
+      console.log('');
+
+      const stackChoice = await tuiSelect(
+        '¿Cómo arrancar el install?',
+        [
+          'npm install ' + green('--legacy-peer-deps') + dim('  (recomendado para ' + problemStacks[0] + ')'),
+          'npm install (sin flags — puede fallar si hay conflictos preexistentes)',
+        ],
+        0,
+      );
+      if (stackChoice.index === 0) {
+        initialFlags = ['--legacy-peer-deps'];
+        usedLegacyPeerDeps = true;
+      }
+    } else if (npmrcHasFlag) {
+      // El .npmrc ya tiene la flag — npm la va a aplicar automáticamente
+      usedLegacyPeerDeps = true;
+    }
+
+    const result = await installMemoryDepsWithRetry(pm, depList, initialFlags);
     if (!result.ok) {
       history.push({ label: 'Dependencias', value: `Falló — faltan: ${result.missing.join(', ')}` });
       renderWizardStep(printMemoryBanner, history, '');
       console.log('  ' + red('✗ No se pudieron instalar las dependencias.'));
       console.log('');
       console.log('  ' + dim('  Probá manualmente:'));
-      console.log('    ' + cyan(`${pm} ${pm === 'npm' ? 'install' : 'add'} ${depList.join(' ')}`));
+      console.log('    ' + cyan(`${pm} ${pm === 'npm' ? 'install' : 'add'} ${depList.join(' ')}${problemStacks.length > 0 ? ' --legacy-peer-deps' : ''}`));
       console.log('  ' + dim('  Cuando estén instaladas, volvé a entrar a "Memory (RAG)".'));
       await pressEnterToContinue();
       return;
     }
+    // Detectar si el install terminó usando --legacy-peer-deps (por initialFlags
+    // o porque el usuario la eligió en el retry menu)
+    if (result.usedFlags && result.usedFlags.includes('--legacy-peer-deps')) {
+      usedLegacyPeerDeps = true;
+    }
+    const flagsApplied = result.usedFlags?.length ? ' ' + result.usedFlags.join(' ') : '';
+    const pmApplied = result.usedPm || pm;
     installSummary = result.exitCode === 0
-      ? `${depList.length} paquetes instalados con ${pm}`
-      : `${depList.length} paquetes instalados con ${pm} (exit ${result.exitCode}, warnings ignorados)`;
+      ? `${depList.length} paquetes instalados con ${pmApplied}${flagsApplied}`
+      : `${depList.length} paquetes instalados (exit ${result.exitCode}, warnings ignorados)`;
   }
   history.push({ label: 'Dependencias', value: installSummary });
+
+  // Si usamos --legacy-peer-deps (manual o desde retry) y .npmrc no lo tiene,
+  // ofrecer persistirla para que futuros installs no fallen.
+  if (usedLegacyPeerDeps && !npmrcHasFlag && pm === 'npm') {
+    console.log('');
+    console.log('  ' + dim('Tu instalación necesitó ') + cyan('--legacy-peer-deps') + dim('.'));
+    console.log('  ' + dim('Para que futuros ') + cyan('npm install') + dim(' no fallen por el mismo motivo,'));
+    console.log('  ' + dim('te conviene persistir la flag en el ') + cyan('.npmrc') + dim(' del proyecto.'));
+    console.log('');
+    const persist = await tuiYesNo(
+      `¿Agregar ${cyan('legacy-peer-deps=true')} al ${cyan('.npmrc')} del proyecto?`,
+      true,
+    );
+    if (persist) {
+      const r = await addLegacyPeerDepsToNpmrc();
+      if (r.added) {
+        console.log('  ' + green('✓ .npmrc actualizado'));
+        history.push({ label: '.npmrc', value: 'legacy-peer-deps=true agregado al .npmrc' });
+      } else {
+        console.log('  ' + dim('  · .npmrc ya tenía la flag — no se modificó'));
+      }
+    } else {
+      console.log('  ' + dim('  · saltado. Vas a tener que pasar --legacy-peer-deps en futuros installs.'));
+    }
+  }
 
   // ─── Step 4/6: Copiar engine al proyecto ────────────────────────────
   renderWizardStep(printMemoryBanner, history, '[4/6] Copiar engine al proyecto');
