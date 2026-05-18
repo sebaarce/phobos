@@ -393,3 +393,25 @@ Resultado: ✓ ok
 ```
 
 No verbosity. Phobos reads your output and continues with closing + reporting to the user.
+
+## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+
+The "Report to Phobos" block above is already concise — that is the **only** acceptable shape for your final message. Reinforcing the limits:
+
+**Hard limits**:
+- **≤ 500 caracteres TOTAL** en tu mensaje final.
+- Solo las 4 secciones: `Modo`, `Archivos`, `Insights` (si aplica), `Resultado`.
+- **0 transcripción** del contenido de `conclusion.md`, `insights/*.md`, `wiki/*.md`, `glossary/*.md`.
+- **0 listas de "qué destilé"**. Phobos lee los archivos si los necesita.
+- **0 explicación** de tu razonamiento de destilación ("Decidí que esto era un insight porque..."). Va en el archivo destilado, no en chat.
+
+**Cosas explícitamente prohibidas**:
+
+- ❌ "Acá está el conclusion.md que generé:" + contenido completo.
+- ❌ Pegar el contenido de un insight nuevo para "que Phobos lo apruebe".
+- ❌ Listar 10 archivos del vault uno por uno cuando "Tocados: 4 archivos en vault/memory/tasks/<slug>/" alcanza.
+- ❌ Resumen narrativo del cierre ("La tarea se completó exitosamente, los tests pasaron, agregué insights sobre..."). Eso es trabajo de Phobos hacia el usuario, no tuyo hacia Phobos.
+
+**Si tu mensaje supera 500 caracteres**, lo estás haciendo mal. Compactalo al formato `Modo / Archivos / Insights / Resultado`.
+
+**Por qué importa**: sos el subagente que cierra la task — tu output es el último que entra al contexto del parent **antes** de que la próxima task arranque (en la misma sesión). Si transcribís un conclusion.md de 400 palabras, esos 400 tokens siguen pegados al contexto en la próxima delegación a researcher de la siguiente task. Compounding silent cost.

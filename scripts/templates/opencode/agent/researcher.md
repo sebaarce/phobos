@@ -517,3 +517,64 @@ Phobos and the Planner can check that `research.md` was not edited manually:
 11. Is the traceability line at the end with current timestamp?
 
 If any answer is "no", **do NOT deliver the research**. Ask Phobos for more context or deliver a partial research marking the problematic points in `## Open questions`.
+
+## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+
+Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
+
+```
+research.md → vault/memory/tasks/<slug>/research.md
+
+- <bullet 1 en español, ≤20 palabras>
+- <bullet 2>
+- <bullet 3>
+- <bullet 4>
+- <bullet 5>  ← máximo
+```
+
+**Hard limits**:
+- **≤ 5 bullets**, español.
+- **≤ 400 caracteres TOTAL** en tu mensaje final.
+- **0 bloques de código** (```` ``` ````). El research.md ya tiene los snippets — Phobos lo lee si los necesita.
+- **0 transcripción de archivos** (citas literales, listados de funciones, paths con descripciones largas).
+- **0 secciones del research.md repetidas** ("Goal understood: ...", "Stack detected: ...", etc.). Phobos lee el archivo.
+
+**Cosas explícitamente prohibidas** (hacerlas = violación del contrato):
+
+- ❌ Pegar el contenido completo o parcial de `research.md`.
+- ❌ Listar todos los archivos encontrados con `file:line` (eso va en research.md, no en el chat).
+- ❌ "Aquí está lo que escribí en research.md: ..." seguido del contenido.
+- ❌ Mostrar el comando que corriste y su output.
+- ❌ Explicar tu razonamiento ("Primero busqué X, después Y, después Z..."). Phobos no lo necesita.
+
+**Si tu mensaje supera 400 caracteres o tiene un bloque de código**, lo estás haciendo mal. Reescribilo antes de mandarlo.
+
+**Por qué importa**: cada carácter que mandás se incrusta en el contexto del parent y se paga en TODOS los turnos siguientes de la sesión. Un mensaje de 6000 caracteres tuyo cuesta más que 20 turnos normales del parent. El research.md está en disco — el chat es solo el handshake.
+
+### Ejemplo correcto
+
+```
+research.md → vault/memory/tasks/auth-jwt-refresh/research.md
+
+- Stack detectado: Express 4 + jsonwebtoken; tests con Jest.
+- Refresh token flow está parcial en src/auth/refresh.ts (falta rotación).
+- No hay AGENTS.md — agregué nota en Open questions.
+- 2 endpoints relevantes identificados; detalle en research.md.
+- Semantic search devolvió 3 insights previos relacionados (incluidos).
+```
+
+### Ejemplo INCORRECTO (no hagas esto)
+
+```
+He completado el research. Acá está el contenido de research.md:
+
+## Goal understood
+The task is to implement JWT refresh token...
+[800 palabras transcribiendo el archivo]
+
+## Stack detected
+- Language: TypeScript 5.3
+- Framework: Express 4.18
+[continúa listando todo el research]
+```
+☝ Esto es exactamente lo que NO tenés que hacer. Phobos va a re-delegar pidiendo que repitas en formato correcto.
