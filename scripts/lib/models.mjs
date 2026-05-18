@@ -685,15 +685,12 @@ export async function chooseMode(history, allModels, current) {
   // el usuario elegía Custom.
   renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir estrategia');
 
-  // Sugerencias usando TODOS los modelos detectados (cross-provider) — el
-  // panel muestra lo que el wizard recomendaría con tu set completo, no
-  // pre-filtrado a un provider arbitrario.
+  // Sugerencias cross-provider — usadas internamente por Custom para el
+  // "modelo sugerido" del header de cada agente. NO se muestran al elegir
+  // estrategia; el panel solo aparece después de elegir Auto + provider.
   const recommendedCross = Object.fromEntries(
     AGENTS.map(a => [a, recommendForAgent(a, allModels)])
   );
-
-  console.log('');
-  renderSuggestionPanel(recommendedCross, current);
 
   const { index } = await tuiSelect(
     '\n¿Cómo asignamos los modelos?',
@@ -738,11 +735,28 @@ export async function chooseMode(history, allModels, current) {
     const provider = await askProvider('[3/4] Asignar modelo · scope para la sugerencia');
     if (!provider) return null;
     const modelsScope = allModels.filter(m => getProvider(m) === provider);
-    // Re-calculamos las recomendaciones scopeadas al provider elegido — si
-    // tiene match, mejor; si no, cae al cross-provider de antes.
-    return Object.fromEntries(
+
+    // Recomendaciones scopeadas al provider elegido — si para algún rol no
+    // hay match en ese scope, caemos al cross-provider de fallback.
+    const suggestion = Object.fromEntries(
       AGENTS.map(a => [a, recommendForAgent(a, modelsScope) || recommendedCross[a]])
     );
+
+    // Recién acá mostramos el panel — el usuario ya eligió Auto y eligió
+    // provider, así que la sugerencia es concreta y scopeada.
+    renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · sugerencia para ' + provider);
+    console.log('');
+    renderSuggestionPanel(suggestion, current);
+
+    const apply = await tuiYesNo('\n¿Aplicar esta sugerencia?', true);
+    if (!apply) {
+      // El usuario vio la sugerencia y no le convenció — devolvemos null
+      // para cancelar el wizard. Puede volver a entrar y elegir otra
+      // estrategia (Custom o Uniform).
+      setHistoryEntry('Estrategia', 'Aplicar sugerencia automática — descartada por el usuario');
+      return null;
+    }
+    return suggestion;
   }
 
   // ─── Uniform ───────────────────────────────────────────────────────
