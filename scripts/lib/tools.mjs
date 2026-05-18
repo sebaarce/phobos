@@ -175,8 +175,20 @@ const CODEGRAPH_PKG = '@colbymchenry/codegraph';
 //   .codegraph/node_modules/.bin/codegraph ← binario invocable
 //   .codegraph/codegraph.db              ← índice (también aislado)
 const CODEGRAPH_HOST_DIR = '.codegraph';
-const CODEGRAPH_BIN = '.codegraph/node_modules/.bin/codegraph';
 const CODEGRAPH_PKG_MARKER = '.codegraph/node_modules/@colbymchenry/codegraph/package.json';
+
+// Path al binario, en formato nativo del SO y con prefix relativo explícito.
+// Windows cmd.exe interpreta el primer `/` como inicio de flag, así que en
+// Windows necesitamos backslashes. Y `.\` (Win) / `./` (Unix) le dice al
+// shell "esto es relativo al cwd actual, no busques en PATH".
+const CODEGRAPH_BIN = platform === 'win32'
+  ? '.\\.codegraph\\node_modules\\.bin\\codegraph'
+  : './.codegraph/node_modules/.bin/codegraph';
+
+// Versión "user-friendly" del path para mostrar en mensajes — siempre con
+// forward slashes para que se vea uniforme y sea copiable en cualquier shell
+// moderno (PowerShell, Git Bash, sh, zsh).
+const CODEGRAPH_BIN_DISPLAY = '.codegraph/node_modules/.bin/codegraph';
 
 // Detecta si CodeGraph ya está instalado y listo en este proyecto.
 // Devuelve un objeto con flags individuales para que la UI pueda mostrar
@@ -341,7 +353,7 @@ export async function installCodeGraph() {
     );
     if (initCode !== 0) {
       console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Probá manualmente:`));
-      console.log(dim('    ') + cyan(`${CODEGRAPH_BIN} init -i`));
+      console.log(dim('    ') + cyan(`${CODEGRAPH_BIN_DISPLAY} init -i`));
       console.log('');
     } else {
       console.log(green('\n  ✓ Config generada en .codegraph/\n'));
@@ -373,18 +385,18 @@ export async function installCodeGraph() {
       console.log(green('\n  ✓ Indexación inicial completa.'));
     } else {
       console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
-      console.log(dim('    Reintentá con: ') + cyan(`${CODEGRAPH_BIN} index`));
+      console.log(dim('    Reintentá con: ') + cyan(`${CODEGRAPH_BIN_DISPLAY} index`));
     }
   } else {
     console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
-    console.log(dim('    ') + cyan(`${CODEGRAPH_BIN} index`));
+    console.log(dim('    ') + cyan(`${CODEGRAPH_BIN_DISPLAY} index`));
   }
 
   // ─── Resumen final ─────────────────────────────────────────────────
   console.log('');
   console.log(bold('  Próximos pasos:'));
-  console.log(dim('    · Probá una query:  ') + cyan(`${CODEGRAPH_BIN} query "..."`));
-  console.log(dim('    · Tests afectados:  ') + cyan(`${CODEGRAPH_BIN} affected <files>`));
+  console.log(dim('    · Probá una query:  ') + cyan(`${CODEGRAPH_BIN_DISPLAY} query "..."`));
+  console.log(dim('    · Tests afectados:  ') + cyan(`${CODEGRAPH_BIN_DISPLAY} affected <files>`));
   console.log(dim('    · El @researcher detectará la instalación automáticamente y usará CodeGraph'));
   console.log(dim('      antes de caer a rg/grep, a partir de la próxima task SDD.'));
   console.log('');
