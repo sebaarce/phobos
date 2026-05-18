@@ -3,11 +3,16 @@ import { spawn } from 'node:child_process';
 import process, { stdout } from 'node:process';
 import { cyan, bold, dim, green, yellow } from './colors.mjs';
 
-export function runChild(cmd, args, label) {
+// `opts` opcional: { cwd } — directorio donde correr el comando.
+// Por compatibilidad backwards, omitir opts ejecuta en el cwd actual.
+export function runChild(cmd, args, label, opts = {}) {
   return new Promise((resolve) => {
     console.log('\n' + cyan('▸ ') + bold(label));
-    console.log(dim('  ejecutando: ' + cmd + ' ' + args.join(' ')) + '\n');
-    const proc = spawn(cmd, args, { stdio: 'inherit', shell: true });
+    const cwdInfo = opts.cwd ? dim('  cwd: ' + opts.cwd + '\n') : '';
+    console.log(dim('  ejecutando: ' + cmd + ' ' + args.join(' ')) + '\n' + cwdInfo);
+    const spawnOpts = { stdio: 'inherit', shell: true };
+    if (opts.cwd) spawnOpts.cwd = opts.cwd;
+    const proc = spawn(cmd, args, spawnOpts);
     proc.on('close', (code) => {
       if (code === 0) {
         console.log(green('\n  ✓ ' + label + ' completado.\n'));

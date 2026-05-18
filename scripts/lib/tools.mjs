@@ -168,12 +168,21 @@ export async function installImpeccable() {
 // ═══════════════════════════════════════════════════════════════════
 
 const CODEGRAPH_PKG = '@colbymchenry/codegraph';
+// Install aislado para que NO entre al package.json del proyecto principal
+// (CI/CD no debería bajarlo nunca). Todo vive bajo .codegraph/:
+//   .codegraph/package.json              ← manifest aislado, propio
+//   .codegraph/node_modules/...          ← node_modules aislado
+//   .codegraph/node_modules/.bin/codegraph ← binario invocable
+//   .codegraph/codegraph.db              ← índice (también aislado)
+const CODEGRAPH_HOST_DIR = '.codegraph';
+const CODEGRAPH_BIN = '.codegraph/node_modules/.bin/codegraph';
+const CODEGRAPH_PKG_MARKER = '.codegraph/node_modules/@colbymchenry/codegraph/package.json';
 
 // Detecta si CodeGraph ya está instalado y listo en este proyecto.
 // Devuelve un objeto con flags individuales para que la UI pueda mostrar
 // estado granular ("instalado pero sin indexar todavía").
 export async function detectCodeGraphStatus() {
-  const pkgInstalled = await fileExists(`node_modules/${CODEGRAPH_PKG}/package.json`);
+  const pkgInstalled = await fileExists(CODEGRAPH_PKG_MARKER);
   const projectInitialized = await fileExists('.codegraph');
   const dbBuilt = await fileExists('.codegraph/codegraph.db');
   return { pkgInstalled, projectInitialized, dbBuilt };
@@ -200,17 +209,49 @@ async function ensureCodeGraphInGitignore() {
   return { added: true };
 }
 
+// Crea (o reusa) el manifest aislado en .codegraph/package.json. Esto
+// es lo que hace que CodeGraph viva fuera del package.json principal del
+// proyecto, y por ende NO sea bajado por CI/CD cuando hace `npm install`.
+async function ensureCodeGraphHostManifest() {
+  const manifestPath = join(CODEGRAPH_HOST_DIR, 'package.json');
+  if (await fileExists(manifestPath)) return { created: false };
+
+  await mkdir(CODEGRAPH_HOST_DIR, { recursive: true }).catch(() => {});
+
+  const manifest = {
+    name: 'phobos-codegraph-host',
+    private: true,
+    version: '0.0.0',
+    description: 'Isolated install of @colbymchenry/codegraph for this project. NOT part of the main package.json — CI/CD will not install it.',
+    dependencies: {
+      [CODEGRAPH_PKG]: 'latest',
+    },
+  };
+  await safeWriteFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  return { created: true };
+}
+
+// Wrapper de invocación del binario. Path absoluto (relativo al cwd) al
+// .bin/codegraph del install aislado. El agente usa este mismo path en su
+// allowlist; el wizard también lo usa para init/index.
+function codegraphBinArgs(...subcommand) {
+  return [CODEGRAPH_BIN, ...subcommand];
+}
+
 export async function installCodeGraph() {
-  console.log('\n' + cyan('▸ ') + bold('Instalar CodeGraph (índice semántico del código, per-proyecto)'));
-  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  (devDependency en este proyecto)'));
+  console.log('\n' + cyan('▸ ') + bold('Instalar CodeGraph (índice semántico del código, install aislado)'));
+  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  →  ' + CODEGRAPH_HOST_DIR + '/node_modules/'));
   console.log(dim('  fuente:  github.com/colbymchenry/codegraph'));
   console.log(dim('  qué hace: AST + grafo de relaciones; reduce ~94% los tool calls del researcher.'));
+  console.log(dim('  ⚡ NO toca el package.json principal — CI/CD nunca lo va a bajar.'));
   console.log('');
 
   // ─── Step 1/6: Verificar prerequisitos ─────────────────────────────
-  if (!await fileExists('package.json')) {
-    console.log(yellow('  ✗ No encontré package.json en este directorio.'));
-    console.log(dim('    CodeGraph se instala per-proyecto. Tenés que estar en la raíz de un proyecto Node.'));
+  // No exigimos package.json — el install aislado funciona en cualquier
+  // directorio. Solo verificamos que estemos en un proyecto razonable.
+  if (!await fileExists('.git') && !await fileExists('package.json') && !await fileExists('AGENTS.md')) {
+    console.log(yellow('  ✗ No parece un proyecto válido (sin .git, package.json o AGENTS.md).'));
+    console.log(dim('    Corré el wizard desde la raíz de un repo.'));
     console.log('');
     return;
   }
@@ -234,11 +275,11 @@ export async function installCodeGraph() {
     }
     if (index === 0) {
       console.log(dim('\n  Re-indexando — puede tardar varios minutos en repos grandes.\n'));
-      const code = await runChild('npx', ['codegraph', 'index'], 'Re-indexar CodeGraph');
+      const code = await runChild('node', codegraphBinArgs('index'), 'Re-indexar CodeGraph');
       if (code === 0) {
         console.log(green('\n  ✓ Re-indexación completa.\n'));
       } else {
-        console.log(yellow(`\n  ⚠ npx codegraph index exit code ${code}.\n`));
+        console.log(yellow(`\n  ⚠ codegraph index exit code ${code}.\n`));
       }
       return;
     }
@@ -247,7 +288,7 @@ export async function installCodeGraph() {
     console.log(dim('  ℹ Paquete instalado pero sin indexar todavía. Voy a inicializar + indexar.\n'));
   } else {
     const confirm = await tuiYesNo(
-      '¿Instalar CodeGraph en este proyecto?',
+      '¿Instalar CodeGraph (aislado) en este proyecto?',
       true,
     );
     if (!confirm) {
@@ -256,49 +297,57 @@ export async function installCodeGraph() {
     }
   }
 
-  // ─── Step 3/6: Instalar paquete con el package manager detectado ───
+  // ─── Step 3/6: Crear manifest aislado + instalar adentro ──────────
+  const m = await ensureCodeGraphHostManifest();
+  if (m.created) {
+    console.log(green('  ✓ ') + dim('Creé manifest aislado en ') + cyan(CODEGRAPH_HOST_DIR + '/package.json'));
+  } else {
+    console.log(dim('  ℹ Manifest aislado ya existe — reuso.'));
+  }
+
   const pm = await detectPackageManager();
   console.log(dim('  Package manager detectado: ') + cyan(pm) + '\n');
 
-  const installArgs = pm === 'yarn'
-    ? ['add', '-D', CODEGRAPH_PKG]
-    : pm === 'pnpm'
-      ? ['add', '-D', CODEGRAPH_PKG]
-      : pm === 'bun'
-        ? ['add', '-D', CODEGRAPH_PKG]
-        : ['install', '--save-dev', CODEGRAPH_PKG];
+  // El install corre adentro de .codegraph/ — no toca el package.json principal.
+  const installArgs = pm === 'yarn' ? ['install']
+                    : pm === 'pnpm' ? ['install']
+                    : pm === 'bun'  ? ['install']
+                    : ['install'];
 
   rl.pause();
-  const installCode = await runChild(pm, installArgs, `Instalar ${CODEGRAPH_PKG} (${pm})`);
+  const installCode = await runChild(
+    pm, installArgs,
+    `Instalar ${CODEGRAPH_PKG} (aislado en ${CODEGRAPH_HOST_DIR}/)`,
+    { cwd: CODEGRAPH_HOST_DIR },
+  );
   if (installCode !== 0) {
-    // Verificar si igual quedó en node_modules — algunos package managers
-    // tiran warnings con exit != 0 pero los paquetes están utilizables.
     const verify = await detectCodeGraphStatus();
     if (!verify.pkgInstalled) {
       console.log(red(`\n  ✗ Falló la instalación (exit ${installCode}).`));
-      console.log(dim('    Probá manualmente: ') + cyan(`${pm} ${installArgs.join(' ')}`));
+      console.log(dim('    Probá manualmente: ') + cyan(`cd ${CODEGRAPH_HOST_DIR} && ${pm} install`));
       console.log('');
       return;
     }
-    console.log(yellow(`\n  ⚠ ${pm} retornó exit ${installCode} pero el paquete está en node_modules. Continuamos.\n`));
+    console.log(yellow(`\n  ⚠ ${pm} retornó exit ${installCode} pero el paquete está. Continuamos.\n`));
   } else {
-    console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado.\n`));
+    console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado en ${CODEGRAPH_HOST_DIR}/node_modules/\n`));
   }
 
-  // ─── Step 4/6: Inicializar (.codegraph/ + config) ──────────────────
-  // `codegraph init -i` es interactivo en upstream. Usamos `codegraph init`
-  // (no interactivo) y si falla, instruimos al usuario a correrlo a mano.
+  // ─── Step 4/6: Inicializar config (.codegraph/config.json) ────────
   if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
-    const initCode = await runChild('npx', ['codegraph', 'init'], 'Inicializar CodeGraph (.codegraph/)');
+    const initCode = await runChild(
+      'node', codegraphBinArgs('init'),
+      'Inicializar CodeGraph (.codegraph/config.json)',
+    );
     if (initCode !== 0) {
-      console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Podés inicializar manualmente con:`));
-      console.log(dim('    ') + cyan('npx codegraph init -i') + dim('  (interactivo)'));
+      console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Probá manualmente:`));
+      console.log(dim('    ') + cyan(`node ${CODEGRAPH_BIN} init -i`));
       console.log('');
     } else {
-      console.log(green('\n  ✓ Proyecto inicializado en .codegraph/\n'));
+      console.log(green('\n  ✓ Config generada en .codegraph/\n'));
     }
   } else {
-    console.log(dim('  ℹ .codegraph/ ya existe — salteo init.\n'));
+    console.log(dim('  ℹ .codegraph/ ya tiene config — salteo init.\n'));
   }
 
   // ─── Step 5/6: .gitignore ─────────────────────────────────────────
@@ -316,25 +365,30 @@ export async function installCodeGraph() {
     true,
   );
   if (wantIndex) {
-    const indexCode = await runChild('npx', ['codegraph', 'index'], 'Indexar el proyecto');
+    const indexCode = await runChild(
+      'node', codegraphBinArgs('index'),
+      'Indexar el proyecto',
+    );
     if (indexCode === 0) {
       console.log(green('\n  ✓ Indexación inicial completa.'));
     } else {
       console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
-      console.log(dim('    Reintentá con: ') + cyan('npx codegraph index'));
+      console.log(dim('    Reintentá con: ') + cyan(`node ${CODEGRAPH_BIN} index`));
     }
   } else {
     console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
-    console.log(dim('    ') + cyan('npx codegraph index'));
+    console.log(dim('    ') + cyan(`node ${CODEGRAPH_BIN} index`));
   }
 
   // ─── Resumen final ─────────────────────────────────────────────────
   console.log('');
   console.log(bold('  Próximos pasos:'));
-  console.log(dim('    · Probá una query:  ') + cyan('npx codegraph query "..."'));
-  console.log(dim('    · Tests afectados:  ') + cyan('npx codegraph affected <files>'));
+  console.log(dim('    · Probá una query:  ') + cyan(`node ${CODEGRAPH_BIN} query "..."`));
+  console.log(dim('    · Tests afectados:  ') + cyan(`node ${CODEGRAPH_BIN} affected <files>`));
   console.log(dim('    · El @researcher detectará la instalación automáticamente y usará CodeGraph'));
   console.log(dim('      antes de caer a rg/grep, a partir de la próxima task SDD.'));
+  console.log('');
+  console.log(dim('  Para borrar todo: ') + cyan(`rm -rf ${CODEGRAPH_HOST_DIR}/`) + dim('  (auto-ignored, no afecta nada más).'));
   console.log('');
 }
 
