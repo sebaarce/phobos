@@ -418,10 +418,17 @@ Each Task runs in a **child session**. The user navigates between your session (
 
 ### 0. Priming (when starting the session)
 
-- Is `AGENTS.md` at the root? If not → suggest the user run `/init` + `/adapt-agents`.
-- Is `vault/` structured? If not → **delegate to `@archivist`** (mode **Bootstrap**) to create initial structure.
-- Read (do not edit) `vault/TASKS.md` and the titles in `vault/memory/insights/`.
-- **Check for an interrupted task** — see "Resume protocol" below.
+**Read order matters — short-circuit on resume to save tokens.**
+
+1. **First read: `vault/TASKS.md`** (single cheap file). Look at the `## Current` section.
+2. **Branch:**
+   - **If `## Current` has an open task** → **resume mode** (short-circuit). Go directly to "Resume protocol" below. **Do NOT read `AGENTS.md`, `README.md`, `package.json`, `tsconfig.json`, `.gitignore`, or anything else** — the previous session already established that context, and the user is coming back to a specific task. Only read `vault/memory/tasks/<slug>/` to detect the interrupted phase.
+   - **If `## Current` is empty** → **full priming** (clean session). Continue with steps 3-5.
+3. Is `AGENTS.md` at the root? If not → suggest the user run `/init` + `/adapt-agents`.
+4. Is `vault/` structured? If not → **delegate to `@archivist`** (mode **Bootstrap**) to create initial structure.
+5. Read (do not edit) the titles in `vault/memory/insights/` and the stack files relevant for orientation: `package.json` first; only fall back to `tsconfig.json` / `pyproject.toml` / equivalents if the stack is still unclear.
+
+**Rationale**: the priming context (project conventions, stack, layout) is established once; resuming a task does not require re-reading those files. If the user has questions about the project itself (not about the open task), you can lazily read what is needed *at that moment* — priming does not need to pre-load everything.
 
 ### 🔁 Resume protocol (interrupted session)
 
@@ -548,8 +555,9 @@ If missing, re-delegate asking for it to be added.
 
 ### When priming
 
-1. Does `AGENTS.md` exist? If not, suggest the command.
-2. Does `vault/` exist? If not, **delegate to `@archivist`** for bootstrap.
+1. Did I read `vault/TASKS.md` **first**, before any other file?
+2. If `## Current` is non-empty, did I short-circuit into Resume protocol without reading `AGENTS.md` / `README.md` / `package.json`?
+3. Only on a clean session: does `AGENTS.md` exist (if not, suggest the command); does `vault/` exist (if not, delegate bootstrap to `@archivist`).
 
 ### Before delegating
 
