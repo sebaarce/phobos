@@ -670,7 +670,10 @@ export async function chooseMode(history, allModels, current) {
   const detectedProviders = Array.from(new Set(allModels.map(m => getProvider(m)))).sort();
   const hasMultipleProviders = detectedProviders.length > 1;
 
-  // OpenCode usa un solo proveedor por sesión — siempre elegimos uno (no hay opción "todos")
+  // OpenCode soporta proveedores distintos por agente (el campo `model:` de
+  // cada .opencode/agent/<agent>.md es independiente). El filtro top-level
+  // aplica a Auto y Uniform (donde tiene sentido un scope único); en Custom
+  // se sobrescribe agente por agente abajo.
   let providerFilter = detectedProviders[0];
 
   // Helper: si ya existe una entry con ese label, la reemplaza; si no, la agrega.
@@ -760,24 +763,78 @@ export async function chooseMode(history, allModels, current) {
     }
 
     if (index === 2) {
-      setHistoryEntry('Estrategia', 'Custom — agente por agente');
+      setHistoryEntry('Estrategia', 'Custom — agente por agente (multi-provider)');
+
+      // Sugerencias cross-provider — para el header del agente cuando hay
+      // múltiples providers detectados, el "modelo sugerido" debe considerar
+      // todos los providers, no solo el del filtro top-level.
+      const recommendedCross = hasMultipleProviders
+        ? Object.fromEntries(AGENTS.map(a => [a, recommendForAgent(a, allModels)]))
+        : recommended;
+
       const target = {};
+      // Sticky default: el provider elegido para el agente anterior queda
+      // pre-seleccionado para el siguiente, ahorra clicks si vas a usar el
+      // mismo provider para varios agentes seguidos.
+      let stickyProvider = providerFilter;
+
       for (let i = 0; i < AGENTS.length; i++) {
         const agent = AGENTS[i];
+
+        // Render limpio: solo banner + wizard history previa (sin entries
+        // per-agent acumulándose). El screen muestra únicamente "N/6" actual.
         renderWizardStep(
           printModelsBanner,
           history,
           `[3/4] Asignar modelo · agente ${i + 1}/${AGENTS.length}: ${agent}`,
         );
-        const prompt = agentHeaderBlock(
+
+        const headerBlock = agentHeaderBlock(
           i, AGENTS.length, agent,
           AGENT_PROFILES[agent].role,
           current[agent],
-          recommended[agent],
+          recommendedCross[agent],
         );
-        target[agent] = await pickFromList(modelsScope, prompt, current[agent]);
-        setHistoryEntry(`  · ${agent}`, target[agent]);
+        console.log(headerBlock);
+
+        // Sub-pregunta 1: ¿qué provider para este agente?
+        // Solo preguntamos si hay múltiples — con uno solo, lo asumimos.
+        let scopedModels = allModels;
+        if (hasMultipleProviders) {
+          const providerOptions = detectedProviders.map(p => {
+            const count = allModels.filter(m => getProvider(m) === p).length;
+            return `${p} (${count} modelos)`;
+          });
+          // Default: provider del modelo actual del agente, si no, el sticky
+          // del agente anterior, si no, el primero detectado.
+          const currentProviderForAgent = getProvider(current[agent] || '');
+          let defaultIdx = detectedProviders.indexOf(currentProviderForAgent);
+          if (defaultIdx < 0) defaultIdx = detectedProviders.indexOf(stickyProvider);
+          if (defaultIdx < 0) defaultIdx = 0;
+
+          const { index: provIdx } = await tuiSelect(
+            '\n¿Qué provider para este agente?',
+            providerOptions,
+            defaultIdx,
+          );
+          const chosenProvider = detectedProviders[provIdx];
+          scopedModels = allModels.filter(m => getProvider(m) === chosenProvider);
+          stickyProvider = chosenProvider;
+        }
+
+        // Sub-pregunta 2: ¿qué modelo dentro del provider elegido?
+        target[agent] = await pickFromList(scopedModels, `\nElegí modelo para @${agent}:`, current[agent]);
       }
+
+      // Resumen del provider final — actualizamos la entry "Provider" para
+      // que refleje la realidad de los cambios (puede ser mono o mixto).
+      const finalProviders = new Set(AGENTS.map(a => getProvider(target[a])));
+      if (finalProviders.size === 1) {
+        setHistoryEntry('Provider', `${[...finalProviders][0]} (todos los agentes)`);
+      } else {
+        setHistoryEntry('Provider', `${finalProviders.size} providers (mixto)`);
+      }
+
       return target;
     }
 
