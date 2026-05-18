@@ -75,6 +75,39 @@ export const PROFILE_WEIGHTS = {
   archivist:  { mid: 100, top:  60, low: -40, known: 15 },
 };
 
+// Preferencia explícita por provider — gana sobre el scoring genérico cuando hay match.
+// El objetivo: si el usuario tiene Zen (opencode/*) configurado, sugerimos el "camino B"
+// — un set coherente con buen aprovechamiento del cache read y costos optimizados por rol.
+// Si no hay match en ese provider, cae al scoring de PROFILE_WEIGHTS (cross-provider).
+//
+// Patrones tolerantes: la versión puede venir con punto (`claude-sonnet-4.6`) o guión
+// (`claude-sonnet-4-6`); ambos son válidos según cómo el provider exponga el ID.
+export const PROVIDER_PREFERENCES = {
+  opencode: {
+    phobos:     [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    planner:    [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    programmer: [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    researcher: [/^opencode\/qwen3?[-.]?6[-.]plus$/i, /^opencode\/qwen/i, /^opencode\/gpt-?5[-.]4[-.]mini$/i],
+    tester:     [/^opencode\/gpt-?5[-.]4[-.]mini$/i, /^opencode\/qwen3?[-.]?6[-.]plus$/i],
+    archivist:  [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+  },
+};
+
+function matchPreferred(agent, allModels) {
+  for (const [provider, byAgent] of Object.entries(PROVIDER_PREFERENCES)) {
+    const patterns = byAgent[agent];
+    if (!patterns) continue;
+    // Solo aplicamos el override si el provider está realmente presente en la lista detectada.
+    const hasProvider = allModels.some(id => id.startsWith(provider + '/'));
+    if (!hasProvider) continue;
+    for (const pattern of patterns) {
+      const hit = allModels.find(id => pattern.test(id));
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 function scoreModel(agent, modelId) {
   const tags = classifyModel(modelId);
   const weights = PROFILE_WEIGHTS[agent] || {};
@@ -88,6 +121,10 @@ function scoreModel(agent, modelId) {
 }
 
 export function recommendForAgent(agent, allModels) {
+  // Override por provider preferido (ej: Zen → "camino B" coherente con cache + costo por rol).
+  const preferred = matchPreferred(agent, allModels);
+  if (preferred) return preferred;
+
   let best = null;
   let bestScore = -Infinity;
   for (const id of allModels) {
