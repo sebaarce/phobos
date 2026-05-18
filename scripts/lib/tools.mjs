@@ -1,14 +1,15 @@
-// Tools — autoskills, obsidian-skills, impeccable, opencode.
-import { mkdir } from 'node:fs/promises';
+// Tools — autoskills, obsidian-skills, impeccable, codegraph, opencode.
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { platform } from 'node:process';
+import { cwd, platform } from 'node:process';
 import { rl } from './runtime.mjs';
-import { fileExists, rmrf } from './fs-utils.mjs';
-import { cyan, bold, dim, yellow, green } from './colors.mjs';
-import { tuiSelect, tuiMultiSelect, panel, clearScreen } from './tui.mjs';
+import { fileExists, rmrf, safeWriteFile } from './fs-utils.mjs';
+import { cyan, bold, dim, yellow, green, red } from './colors.mjs';
+import { tuiSelect, tuiMultiSelect, tuiYesNo, panel, clearScreen } from './tui.mjs';
 import { runChild } from './child.mjs';
 import { printToolsBanner, showHappyGoodbye } from './banners.mjs';
 import { finalizeAndExit, pressEnterToContinue } from './exit.mjs';
+import { detectPackageManager } from './memory/deps.mjs';
 
 export async function installObsidianSkills() {
   // Instalación per-proyecto vía Skills CLI (npx skills add).
@@ -160,6 +161,240 @@ export async function installImpeccable() {
   console.log(dim('    echo ".opencode/skills/impeccable/" >> .gitignore\n'));
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// CodeGraph — índice semántico AST + grafo de relaciones del código.
+// Per-project install (devDependency en package.json) — alineado con
+// el patrón que usa Memory para sus deps.
+// ═══════════════════════════════════════════════════════════════════
+
+const CODEGRAPH_PKG = '@colbymchenry/codegraph';
+
+// Detecta si CodeGraph ya está instalado y listo en este proyecto.
+// Devuelve un objeto con flags individuales para que la UI pueda mostrar
+// estado granular ("instalado pero sin indexar todavía").
+export async function detectCodeGraphStatus() {
+  const pkgInstalled = await fileExists(`node_modules/${CODEGRAPH_PKG}/package.json`);
+  const projectInitialized = await fileExists('.codegraph');
+  const dbBuilt = await fileExists('.codegraph/codegraph.db');
+  return { pkgInstalled, projectInitialized, dbBuilt };
+}
+
+// Asegura que `.codegraph/` esté listado en .gitignore. Idempotente — si
+// ya está, no toca el archivo. Si no existe .gitignore, lo crea.
+async function ensureCodeGraphInGitignore() {
+  const path = '.gitignore';
+  let existing = '';
+  try {
+    existing = await readFile(join(cwd(), path), 'utf-8');
+  } catch {}
+
+  // Match líneas que mencionen .codegraph/ o .codegraph (con o sin slash final).
+  const alreadyListed = /^\s*\.codegraph\/?\s*$/m.test(existing);
+  if (alreadyListed) return { added: false };
+
+  const snippet = '\n# CodeGraph — índice local del código (no commitear)\n.codegraph/\n';
+  const content = existing.endsWith('\n') || existing === ''
+    ? existing + snippet
+    : existing + '\n' + snippet;
+  await safeWriteFile(path, content);
+  return { added: true };
+}
+
+export async function installCodeGraph() {
+  console.log('\n' + cyan('▸ ') + bold('Instalar CodeGraph (índice semántico del código, per-proyecto)'));
+  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  (devDependency en este proyecto)'));
+  console.log(dim('  fuente:  github.com/colbymchenry/codegraph'));
+  console.log(dim('  qué hace: AST + grafo de relaciones; reduce ~94% los tool calls del researcher.'));
+  console.log('');
+
+  // ─── Step 1/6: Verificar prerequisitos ─────────────────────────────
+  if (!await fileExists('package.json')) {
+    console.log(yellow('  ✗ No encontré package.json en este directorio.'));
+    console.log(dim('    CodeGraph se instala per-proyecto. Tenés que estar en la raíz de un proyecto Node.'));
+    console.log('');
+    return;
+  }
+
+  const status = await detectCodeGraphStatus();
+
+  // ─── Step 2/6: Decidir acción según estado actual ─────────────────
+  if (status.pkgInstalled && status.dbBuilt) {
+    const { index } = await tuiSelect(
+      'CodeGraph ya está instalado e indexado. ¿Qué hacer?',
+      [
+        'Re-indexar (recomendado si el código cambió mucho)',
+        'Re-instalar el paquete (forzar actualización a la última versión)',
+        'Cancelar',
+      ],
+      0,
+    );
+    if (index === 2) {
+      console.log(dim('  ⊘ saltado.\n'));
+      return;
+    }
+    if (index === 0) {
+      console.log(dim('\n  Re-indexando — puede tardar varios minutos en repos grandes.\n'));
+      const code = await runChild('npx', ['codegraph', 'index'], 'Re-indexar CodeGraph');
+      if (code === 0) {
+        console.log(green('\n  ✓ Re-indexación completa.\n'));
+      } else {
+        console.log(yellow(`\n  ⚠ npx codegraph index exit code ${code}.\n`));
+      }
+      return;
+    }
+    // index === 1: cae al flujo normal y reinstala el paquete.
+  } else if (status.pkgInstalled && !status.dbBuilt) {
+    console.log(dim('  ℹ Paquete instalado pero sin indexar todavía. Voy a inicializar + indexar.\n'));
+  } else {
+    const confirm = await tuiYesNo(
+      '¿Instalar CodeGraph en este proyecto?',
+      true,
+    );
+    if (!confirm) {
+      console.log(dim('  ⊘ saltado.\n'));
+      return;
+    }
+  }
+
+  // ─── Step 3/6: Instalar paquete con el package manager detectado ───
+  const pm = await detectPackageManager();
+  console.log(dim('  Package manager detectado: ') + cyan(pm) + '\n');
+
+  const installArgs = pm === 'yarn'
+    ? ['add', '-D', CODEGRAPH_PKG]
+    : pm === 'pnpm'
+      ? ['add', '-D', CODEGRAPH_PKG]
+      : pm === 'bun'
+        ? ['add', '-D', CODEGRAPH_PKG]
+        : ['install', '--save-dev', CODEGRAPH_PKG];
+
+  rl.pause();
+  const installCode = await runChild(pm, installArgs, `Instalar ${CODEGRAPH_PKG} (${pm})`);
+  if (installCode !== 0) {
+    // Verificar si igual quedó en node_modules — algunos package managers
+    // tiran warnings con exit != 0 pero los paquetes están utilizables.
+    const verify = await detectCodeGraphStatus();
+    if (!verify.pkgInstalled) {
+      console.log(red(`\n  ✗ Falló la instalación (exit ${installCode}).`));
+      console.log(dim('    Probá manualmente: ') + cyan(`${pm} ${installArgs.join(' ')}`));
+      console.log('');
+      return;
+    }
+    console.log(yellow(`\n  ⚠ ${pm} retornó exit ${installCode} pero el paquete está en node_modules. Continuamos.\n`));
+  } else {
+    console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado.\n`));
+  }
+
+  // ─── Step 4/6: Inicializar (.codegraph/ + config) ──────────────────
+  // `codegraph init -i` es interactivo en upstream. Usamos `codegraph init`
+  // (no interactivo) y si falla, instruimos al usuario a correrlo a mano.
+  if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
+    const initCode = await runChild('npx', ['codegraph', 'init'], 'Inicializar CodeGraph (.codegraph/)');
+    if (initCode !== 0) {
+      console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Podés inicializar manualmente con:`));
+      console.log(dim('    ') + cyan('npx codegraph init -i') + dim('  (interactivo)'));
+      console.log('');
+    } else {
+      console.log(green('\n  ✓ Proyecto inicializado en .codegraph/\n'));
+    }
+  } else {
+    console.log(dim('  ℹ .codegraph/ ya existe — salteo init.\n'));
+  }
+
+  // ─── Step 5/6: .gitignore ─────────────────────────────────────────
+  const gi = await ensureCodeGraphInGitignore();
+  if (gi.added) {
+    console.log(green('  ✓ ') + dim('Agregué ') + cyan('.codegraph/') + dim(' a .gitignore'));
+  } else {
+    console.log(dim('  ℹ .codegraph/ ya estaba en .gitignore'));
+  }
+  console.log('');
+
+  // ─── Step 6/6: Indexación inicial ─────────────────────────────────
+  const wantIndex = await tuiYesNo(
+    '¿Correr indexación inicial ahora? (puede tardar varios minutos en repos grandes)',
+    true,
+  );
+  if (wantIndex) {
+    const indexCode = await runChild('npx', ['codegraph', 'index'], 'Indexar el proyecto');
+    if (indexCode === 0) {
+      console.log(green('\n  ✓ Indexación inicial completa.'));
+    } else {
+      console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
+      console.log(dim('    Reintentá con: ') + cyan('npx codegraph index'));
+    }
+  } else {
+    console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
+    console.log(dim('    ') + cyan('npx codegraph index'));
+  }
+
+  // ─── Resumen final ─────────────────────────────────────────────────
+  console.log('');
+  console.log(bold('  Próximos pasos:'));
+  console.log(dim('    · Probá una query:  ') + cyan('npx codegraph query "..."'));
+  console.log(dim('    · Tests afectados:  ') + cyan('npx codegraph affected <files>'));
+  console.log(dim('    · El @researcher detectará la instalación automáticamente y usará CodeGraph'));
+  console.log(dim('      antes de caer a rg/grep, a partir de la próxima task SDD.'));
+  console.log('');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Tools registry — Opción A (registry plano)
+// ═══════════════════════════════════════════════════════════════════
+//
+// Cada entry describe una herramienta del menú "Instalar herramientas".
+// Para agregar una nueva: 1 entry. El menú y el dispatcher se generan
+// del array, no hay switch hardcodeado por índice.
+//
+// Contrato de cada Tool:
+//   id         string — identificador único (no se muestra, sirve para debug).
+//   label      string | async () => string — texto del item. Si es función,
+//              puede consultar el filesystem para mostrar estado dinámico
+//              (ej: "instalado · re-instalar / re-indexar").
+//   action     async () => void — qué hacer cuando el usuario lo elige.
+//   exitAfter  bool (opcional) — si true, después de ejecutar el wizard
+//              cierra (caso típico: "Abrir OpenCode" reemplaza el proceso).
+//
+// Para growth grande (>10 herramientas) considerar Opción C (plugin
+// discovery: cada tool en su propio archivo bajo scripts/lib/tools/).
+const TOOLS = [
+  {
+    id: 'autoskills',
+    label: 'npx autoskills           ' + dim('— skills del proyecto en ./skills/'),
+    action: () => runChild('npx', ['autoskills'], 'Generar skills/ del proyecto'),
+  },
+  {
+    id: 'obsidian-skills',
+    label: 'Instalar obsidian-skills ' + dim('— vault/notes en formato Obsidian'),
+    action: installObsidianSkills,
+  },
+  {
+    id: 'impeccable',
+    label: 'Instalar impeccable      ' + dim('— skill de diseño/UI (vocab + anti-patterns)'),
+    action: installImpeccable,
+  },
+  {
+    id: 'codegraph',
+    label: async () => {
+      const s = await detectCodeGraphStatus();
+      if (s.pkgInstalled && s.dbBuilt) {
+        return 'Instalar CodeGraph       ' + dim('(instalado · re-instalar / re-indexar)');
+      }
+      if (s.pkgInstalled && !s.dbBuilt) {
+        return 'Instalar CodeGraph       ' + dim('(paquete instalado · falta indexar)');
+      }
+      return 'Instalar CodeGraph       ' + dim('— índice semántico del código (–94% tool calls)');
+    },
+    action: installCodeGraph,
+  },
+  {
+    id: 'opencode',
+    label: 'Abrir OpenCode           ' + dim('— lanzar el TUI'),
+    action: () => runChild('opencode', [], 'Abrir OpenCode'),
+    exitAfter: true,
+  },
+];
+
 export async function actionInstallTools() {
   while (true) {
     clearScreen();
@@ -169,30 +404,28 @@ export async function actionInstallTools() {
       dim('Elegí una opción con ↑/↓ y Enter.'),
     ]);
 
+    // Resolver labels: si es función la await-eamos para que pueda consultar
+    // estado del filesystem. Si es string, lo dejamos como está.
+    const labels = await Promise.all(
+      TOOLS.map(t => typeof t.label === 'function' ? t.label() : t.label),
+    );
+    const backLabel = dim('← Volver al menú principal');
+    const backIndex = labels.length;
+
     const { index } = await tuiSelect(
       '\n¿Qué querés hacer?',
-      [
-        'npx autoskills           ' + dim('— skills del proyecto en ./skills/'),
-        'Instalar obsidian-skills ' + dim('— vault/notes en formato Obsidian'),
-        'Instalar impeccable      ' + dim('— skill de diseño/UI (vocab + anti-patterns)'),
-        'Abrir OpenCode           ' + dim('— lanzar el TUI'),
-        dim('← Volver al menú principal'),
-      ],
+      [...labels, backLabel],
       0,
     );
 
-    if (index === 4) return; // volver
+    if (index === backIndex) return;
 
+    const tool = TOOLS[index];
     rl.pause();
-    if (index === 0) {
-      await runChild('npx', ['autoskills'], 'Generar skills/ del proyecto');
-    } else if (index === 1) {
-      await installObsidianSkills();
-    } else if (index === 2) {
-      await installImpeccable();
-    } else if (index === 3) {
-      await runChild('opencode', [], 'Abrir OpenCode');
-      // Si se abrió OpenCode, el usuario probablemente quiera salir del wizard
+    await tool.action();
+
+    if (tool.exitAfter) {
+      // Caso "Abrir OpenCode" — el usuario probablemente quiera salir del wizard.
       showHappyGoodbye();
       finalizeAndExit(0);
       return;

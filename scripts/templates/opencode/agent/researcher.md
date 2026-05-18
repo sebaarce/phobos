@@ -24,6 +24,20 @@ permission:
     "git ls-files*": allow
     "date*": allow
     "Get-Date*": allow
+    # CodeGraph — índice semántico del código si el usuario lo instaló.
+    # Solo read-only (query/affected); init/index los corre el usuario.
+    "npx codegraph query*": allow
+    "npx codegraph affected*": allow
+    "npx codegraph search*": allow
+    "npx codegraph callers*": allow
+    "npx codegraph callees*": allow
+    "npx codegraph refs*": allow
+    "npx codegraph definition*": allow
+    "npx codegraph status*": allow
+    "pnpm exec codegraph query*": allow
+    "pnpm exec codegraph affected*": allow
+    "pnpm exec codegraph search*": allow
+    "pnpm exec codegraph status*": allow
 security:
   slug_regex: "^[a-zA-Z0-9_-]{3,60}$"
   forbidden_paths:
@@ -77,6 +91,45 @@ Your internal reasoning, tool calls, `research.md` content, citations, and code 
 The English prompt exists for performance — Spanish output exists because Phobos and the user think and work in Spanish.
 
 The `research.md` file itself is written in **English** (so future skills and tooling parse it consistently), with the same structure (`## Goal understood`, `## Relevant files and symbols`, `## Dependencies and contracts`, `## Constraints and risks`, `## Open questions`, `## Updated <date>`, traceability footer).
+
+## Pre-flight: structural query over the source code (CodeGraph — optional)
+
+**Before** any `rg`/`grep`/`cat` pass over the source code, **check whether the project has CodeGraph installed**. CodeGraph is an optional local AST + relation graph that the user installs via the wizard (`phobos` → Instalar herramientas → CodeGraph). When available, it answers structural questions (callers, callees, references, definitions, affected tests) in **a single tool call** instead of dozens of `rg` invocations.
+
+**Lazy detection** (cheap, no SKILL.md read — just check artifacts on disk):
+
+```bash
+# bash / unix
+ls node_modules/@colbymchenry/codegraph/package.json 2>/dev/null \
+  && ls .codegraph/codegraph.db 2>/dev/null
+```
+
+```powershell
+# Windows / PowerShell
+Test-Path node_modules\@colbymchenry\codegraph\package.json
+Test-Path .codegraph\codegraph.db
+```
+
+**If BOTH artifacts exist** → CodeGraph is installed and indexed. Use it for the following question types **before** falling back to `rg`/`grep`:
+
+| Pregunta | Comando CodeGraph | Alternativa (sin CodeGraph) |
+|----------|-------------------|------------------------------|
+| ¿Quién llama a función X? | `npx codegraph callers --symbol X` | `rg "X\(" -t ts` (impreciso) |
+| ¿Qué funciones llama X? | `npx codegraph callees --symbol X` | leer X y trazar a mano |
+| ¿Dónde se define el símbolo X? | `npx codegraph definition --symbol X` | `rg "(function|class|const) X"` |
+| ¿Qué tests se afectan si toco archivo Y? | `npx codegraph affected <Y>` | `rg <Y>` + lectura manual |
+| Búsqueda semántica sobre el código | `npx codegraph search "..."` | `rg "..."` |
+| Estado del índice | `npx codegraph status` | n/a |
+
+**Reglas de uso**:
+
+1. **Preferí CodeGraph para preguntas estructurales** — son las que `rg` resuelve mal (`rg "X("` te trae usos en strings, comentarios, etc., y necesita filtros). CodeGraph parsea AST y desambigua.
+2. **Para texto literal** (mensajes de error, strings concretos), seguí usando `rg` — es lo correcto.
+3. **Si CodeGraph devuelve resultados poco confiables o vacíos donde sabés que hay datos**, podría estar desactualizado. Corré `npx codegraph status` para chequear; el sync automático suele encargarse pero un repo recién clonado / re-indexado puede tardar.
+4. **No corras `npx codegraph init` ni `npx codegraph index`** — esos son comandos del usuario (los gatilla el wizard). Tu allowlist solo te habilita los read-only.
+5. **NO leas el `SKILL.md` de CodeGraph** salvo que necesites un comando exótico — la tabla de arriba cubre el 95% de los casos y mantiene tu contexto chico.
+
+**Si CodeGraph NO está instalado** (ausencia de `.codegraph/codegraph.db` o de `node_modules/@colbymchenry/codegraph`), **salteá esta sección entera y procedé con `rg`/`grep`/`cat` como antes**. No es bloqueante; es una optimización opt-in. Tampoco anotes nada en `## Open questions` — su ausencia es esperada.
 
 ## Pre-flight: semantic search over the vault (memory engine)
 

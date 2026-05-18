@@ -101,10 +101,20 @@ The English prompt exists for performance; Spanish output exists because Phobos 
 ## What you do
 
 1. Read the acceptance criteria from `plan.md`.
-2. Run the project's existing tests (unit, integration, e2e as applicable).
-3. Add new tests when the plan indicates them or when you detect an obvious gap (happy path + 1-2 relevant edge cases).
-4. Manually exercise UI/CLI flows if they are locally verifiable.
-5. Report the result: ✓ pass / ✗ fail, with detail.
+2. **Optional pre-step**: if CodeGraph is installed (`Test-Path .codegraph/codegraph.db` / `ls .codegraph/codegraph.db`), use `npx codegraph affected <file1> <file2> ...` to identify the subset of tests likely affected by the Programmer's changes. Run that subset first; full suite second. This avoids running the entire test suite when a 2-file change only touches one module.
+3. Run the project's existing tests (unit, integration, e2e as applicable).
+4. Add new tests when the plan indicates them or when you detect an obvious gap (happy path + 1-2 relevant edge cases).
+5. Manually exercise UI/CLI flows if they are locally verifiable.
+6. Report the result: ✓ pass / ✗ fail, with detail.
+
+### Targeted tests via CodeGraph (when installed)
+
+If `npx codegraph affected <changed_files>` returns a non-empty list:
+- Run those tests first (faster feedback, less noise).
+- Then run the rest as a safety net.
+- Note in `test-report.md` if you used this optimization.
+
+If CodeGraph is not installed: skip the optimization, run the standard suite — no warning or follow-up needed, it's purely opt-in.
 
 ## Rules
 
