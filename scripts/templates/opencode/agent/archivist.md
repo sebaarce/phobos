@@ -28,11 +28,8 @@ permission:
     "Get-Date*": allow
     "node vault/memory/.engine/*": allow
     "npx*": allow
-    # Cost reporting — opencode usage stats and session export (read-only)
-    "opencode stats*": allow
-    "opencode session list*": allow
-    "opencode export*": allow
-    "jq *": allow
+    # Cost reporting — dedicated script handles parsing + writing costs.md
+    "node vault/memory/.engine/costs.mjs*": allow
 security:
   slug_regex: "^[a-zA-Z0-9_-]{3,60}$"
   forbidden_paths:
@@ -300,138 +297,30 @@ In all failure cases the Close task itself completes — the re-index is best-ef
 
 **Goal**: write `vault/memory/tasks/<slug>/costs.md` summarizing the OpenCode usage attributable to this task. The user uses this to track per-task cost and detect regressions (e.g., a model that stopped caching).
 
-**Source of truth**: `opencode stats` and `opencode session list` (the same data that powers the OpenCode dashboard). **Never invent numbers** — if the commands fail, write the error fallback (see below).
+**You DO NOT parse `opencode stats` output yourself** — a dedicated script handles parsing, attribution, cache health, and the fallback. **Your job is to invoke it.**
 
 **Procedure**:
 
-1. **Read `Opened-At`** from the task README (the precise timestamp captured at Open task time):
+1. **Verify the script exists**:
    ```bash
-   OPENED_AT=$(grep "^**Opened-At:**" vault/memory/tasks/<slug>/README.md | sed 's/^\*\*Opened-At:\*\* //')
+   ls vault/memory/.engine/costs.mjs 2>/dev/null
    ```
-   In PowerShell:
-   ```powershell
-   $OPENED_AT = (Select-String -Path vault/memory/tasks/<slug>/README.md -Pattern '^\*\*Opened-At:\*\*' | ForEach-Object { $_.Line -replace '^\*\*Opened-At:\*\* ', '' })
-   ```
+   If it doesn't exist → skip this step entirely. The project does not have the cost reporter installed (run `phobos` → **Memory** → **Install** to get it). Note this in `conclusion.md` follow-ups and continue.
 
-2. **Capture the closing timestamp**: `date "+%Y-%m-%d %H:%M:%S"` (or `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`).
-
-3. **Try to gather OpenCode usage data**:
-
+2. **Run the script with the slug**:
    ```bash
-   # Aggregate stats for the current project, last 1 day, with per-model breakdown
-   opencode stats --project '' --days 1 --models > .tmp-task-stats.txt 2>&1 || echo "ERROR" > .tmp-task-stats.txt
+   node vault/memory/.engine/costs.mjs <slug>
    ```
 
-   In PowerShell:
-   ```powershell
-   try {
-     opencode stats --project '' --days 1 --models | Out-File .tmp-task-stats.txt -Encoding utf8
-   } catch {
-     'ERROR' | Out-File .tmp-task-stats.txt -Encoding utf8
-   }
-   ```
+3. **Check the result**:
+   - Exit 0 with `costs.md written (real): vault/memory/tasks/<slug>/costs.md` → ✅ done.
+   - Exit 0 with `costs.md written (fallback): ...` → ⚠️ written but with the error-fallback template (stats command failed or output unparseable). Mention `(fallback)` in your report to Phobos.
+   - Exit non-zero → the script itself errored (e.g., README missing, invalid slug). Log the error message in `conclusion.md` follow-ups; do NOT abort the Close task.
 
-4. **Try to list sessions inside the task window** (for per-session granularity):
-
-   ```bash
-   opencode session list --format json -n 200 > .tmp-sessions.json 2>&1 || echo "[]" > .tmp-sessions.json
-   ```
-
-5. **Compute and write** `vault/memory/tasks/<slug>/costs.md` following the template below.
-
-6. **Cleanup**: delete `.tmp-task-stats.txt` and `.tmp-sessions.json` after writing.
-
-##### costs.md template (when data is available)
-
-```markdown
-# Cost report — <slug>
-
-## Window
-- **Opened:** <Opened-At timestamp from README>
-- **Closed:** <closing timestamp>
-- **Duration:** <e.g., 1h 23m>
-
-## Aggregate (project, last 24h)
-
-| Metric | Value |
-|--------|-------|
-| Total cost | $X.XX |
-| Sessions | N |
-| Messages | N |
-| Input tokens | XK |
-| Output tokens | XK |
-| Cache read | XK |
-| Cache write | XK |
-
-## Per-model breakdown
-
-| Model | Msgs | Input | Output | Cache read | Cache write | Cost |
-|-------|------|-------|--------|------------|-------------|------|
-| <provider/model> | N | XK | XK | XK | XK | $X.XX |
-| ... | | | | | | |
-
-## Per-agent attribution (heuristic by model)
-
-Approximate mapping based on the model assigned to each agent in `.opencode/agent/*.md`:
-
-| Agent | Model | Cost |
-|-------|-------|------|
-| @phobos | <model from phobos.md frontmatter> | $X.XX |
-| @researcher | <model> | $X.XX |
-| @planner | <model> | $X.XX |
-| @programmer | <model> | $X.XX |
-| @tester | <model> | $X.XX |
-| @archivist | <model> | $X.XX |
-
-⚠️ Per-agent rows are best-effort — if multiple agents share a model, the cost is summed under that model and cannot be split further. For exact per-session attribution use `opencode export <sessionID>`.
-
-## Cache health
-
-- ✅ Models with cache read > 0: <list>
-- ⚠️ Models with cache read = 0 (not caching, expensive): <list — if any, flag as follow-up>
-
-## Source
-- **Source:** `opencode stats --project '' --days 1 --models` + `opencode session list --format json` filtered to window above.
-- **Authoritative reference:** OpenCode dashboard.
-
-## Updated <YYYY-MM-DD>
-
-<!-- Traceability: costs.md generated by Archivist at <YYYY-MM-DD HH:MM:SS> -->
-```
-
-##### costs.md fallback template (when `opencode stats` fails)
-
-If the temp file contains `ERROR` or the parse fails, write this minimal version instead:
-
-```markdown
-# Cost report — <slug>
-
-## Window
-- **Opened:** <Opened-At timestamp from README>
-- **Closed:** <closing timestamp>
-
-## Aggregate
-
-⚠️ **Error al estimar — `opencode stats` no respondió o devolvió error.**
-
-Para los números reales, consultá el dashboard de OpenCode filtrando por la ventana de tiempo arriba.
-
-## Source
-- **Attempted:** `opencode stats --project '' --days 1 --models`
-- **Result:** failed (command not available, network/IO error, or unexpected output).
-- **Authoritative reference:** OpenCode dashboard.
-
-## Updated <YYYY-MM-DD>
-
-<!-- Traceability: costs.md generated by Archivist at <YYYY-MM-DD HH:MM:SS> (fallback mode — stats unavailable) -->
-```
-
-##### Rules
-
-- **Never invent numbers.** If `opencode stats` doesn't produce parseable output, use the fallback template.
-- **Round token counts** to thousands (`12.7K`) for readability. Costs to 2-3 decimals (`$0.227`).
-- **`costs.md` failure is NOT blocking** for the Close task — same policy as the re-index: log a follow-up in `conclusion.md` if you couldn't generate it, but the task still closes successfully.
-- **The window is informational, not a filter on the stats command** — `opencode stats` aggregates by day, not by precise window. The `Opened`/`Closed` lines exist so the user can mentally subtract overlapping work.
+**Rules**:
+- **Never write `costs.md` yourself** — always delegate to `costs.mjs`. Trying to parse `opencode stats` ASCII output in the prompt is unreliable and burns tokens.
+- **`costs.md` failure is NOT blocking** for Close — same policy as the re-index. Log it as a follow-up and continue.
+- The script reads `Opened-At` from `README.md`, runs `opencode stats --project '' --days 1 --models`, parses the output, computes per-agent attribution from the frontmatter of `.opencode/agent/*.md`, and detects cache health. You don't need to coordinate any of that.
 
 ### Mode 5 — Skip tester
 
