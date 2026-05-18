@@ -6,7 +6,7 @@ import { stdin, stdout, exit, platform, env, cwd } from 'node:process';
 import { AGENTS, AGENT_PROFILES, rl } from './runtime.mjs';
 import { fileExists, tryExec, assertSafeShellArg, safeWriteFile } from './fs-utils.mjs';
 import { green, yellow, cyan, red, dim, bold, pad } from './colors.mjs';
-import { panel, tuiSelect, tuiYesNo } from './tui.mjs';
+import { panel, tuiSelect, tuiYesNo, clearScreen } from './tui.mjs';
 import { printModelsBanner, renderWizardStep } from './banners.mjs';
 import { pressEnterToContinue } from './exit.mjs';
 import { backupAgents } from './update.mjs';
@@ -670,12 +670,6 @@ export async function chooseMode(history, allModels, current) {
   const detectedProviders = Array.from(new Set(allModels.map(m => getProvider(m)))).sort();
   const hasMultipleProviders = detectedProviders.length > 1;
 
-  // OpenCode soporta proveedores distintos por agente (el campo `model:` de
-  // cada .opencode/agent/<agent>.md es independiente). El filtro top-level
-  // aplica a Auto y Uniform (donde tiene sentido un scope único); en Custom
-  // se sobrescribe agente por agente abajo.
-  let providerFilter = detectedProviders[0];
-
   // Helper: si ya existe una entry con ese label, la reemplaza; si no, la agrega.
   function setHistoryEntry(label, value) {
     const existing = history.findIndex(h => h.label === label);
@@ -683,169 +677,155 @@ export async function chooseMode(history, allModels, current) {
     else history.push({ label, value });
   }
 
-  // Helper: quita todas las entries posteriores a (e incluyendo) un label.
-  // Útil cuando volvemos al sub-step A desde "Cambiar proveedor".
-  function trimHistoryFrom(label) {
-    const idx = history.findIndex(h => h.label === label);
-    if (idx >= 0) history.splice(idx);
-  }
+  // ─── Sub-step 3a: mostrar sugerencia cross-provider + elegir estrategia ───
+  //
+  // Estrategia ANTES de provider: el scope tiene sentido recién cuando sabemos
+  // si el usuario va a usar Auto/Uniform (un único scope) o Custom (un scope
+  // distinto por agente). Preguntar provider primero gastaba un click cuando
+  // el usuario elegía Custom.
+  renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir estrategia');
 
-  while (true) {
-    // ─── Sub-step 3a: elegir provider (si hay múltiples) ─────────────
-    if (hasMultipleProviders) {
-      // Si venimos de un loop ("Cambiar proveedor"), borrar entries posteriores
-      trimHistoryFrom('Estrategia');
+  // Sugerencias usando TODOS los modelos detectados (cross-provider) — el
+  // panel muestra lo que el wizard recomendaría con tu set completo, no
+  // pre-filtrado a un provider arbitrario.
+  const recommendedCross = Object.fromEntries(
+    AGENTS.map(a => [a, recommendForAgent(a, allModels)])
+  );
 
-      renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir proveedor');
+  console.log('');
+  renderSuggestionPanel(recommendedCross, current);
 
-      const providerOptions = detectedProviders.map(p => {
-        const count = allModels.filter(m => getProvider(m) === p).length;
-        return `${p} (${count} modelos)`;
-      });
-
-      const defaultIdx = Math.max(0, detectedProviders.indexOf(providerFilter));
-
-      const { index: provIdx } = await tuiSelect(
-        '\n¿Qué proveedor usamos?',
-        providerOptions,
-        defaultIdx,
-      );
-
-      providerFilter = detectedProviders[provIdx];
-      const count = allModels.filter(m => getProvider(m) === providerFilter).length;
-      setHistoryEntry('Provider', `${providerFilter} (${count} modelos)`);
-    } else {
-      // Solo un provider — registramos sin preguntar
-      const count = allModels.filter(m => getProvider(m) === providerFilter).length;
-      setHistoryEntry('Provider', `${providerFilter} (${count} modelos) — único disponible`);
-    }
-
-    // ─── Sub-step 3b: mostrar sugerencia + elegir estrategia ─────────
-    renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir estrategia');
-
-    const modelsScope = allModels.filter(m => getProvider(m) === providerFilter);
-
-    const recommended = Object.fromEntries(
-      AGENTS.map(a => [a, recommendForAgent(a, modelsScope)])
-    );
-
-    console.log('');
-    renderSuggestionPanel(recommended, current);
-
-    const modeOptions = [
+  const { index } = await tuiSelect(
+    '\n¿Cómo asignamos los modelos?',
+    [
       'Aplicar la sugerencia automática',
       'Asignar el MISMO modelo a todos (preset uniforme)',
-      'Custom — agente por agente (con filtros)',
-    ];
-    if (hasMultipleProviders) {
-      modeOptions.push('Cambiar proveedor de la sugerencia');
-    }
-    modeOptions.push('Cancelar y salir');
+      'Custom — agente por agente (multi-provider)',
+      'Cancelar y salir',
+    ],
+    0,
+  );
 
-    const { index } = await tuiSelect(
-      '\n¿Cómo asignamos los modelos?',
-      modeOptions,
+  // Helper: cuando una estrategia requiere un provider único (Auto/Uniform)
+  // y hay múltiples detectados, este sub-step lo pregunta. Devuelve el
+  // provider elegido o null si el usuario canceló con Esc.
+  async function askProvider(stepLabel) {
+    if (!hasMultipleProviders) {
+      const only = detectedProviders[0];
+      const count = allModels.filter(m => getProvider(m) === only).length;
+      setHistoryEntry('Provider', `${only} (${count} modelos) — único disponible`);
+      return only;
+    }
+    renderWizardStep(printModelsBanner, history, stepLabel);
+    const providerOptions = detectedProviders.map(p => {
+      const count = allModels.filter(m => getProvider(m) === p).length;
+      return `${p} (${count} modelos)`;
+    });
+    const { index: provIdx } = await tuiSelect(
+      '\n¿Qué proveedor usamos?',
+      providerOptions,
       0,
     );
-
-    if (index === 0) {
-      setHistoryEntry('Estrategia', 'Aplicar sugerencia automática');
-      return recommended;
-    }
-
-    if (index === 1) {
-      setHistoryEntry('Estrategia', 'Mismo modelo para TODOS los agentes');
-      renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir modelo uniforme');
-      const uniformPrompt = '  ' + bold(cyan('Modelo para TODOS los agentes')) + '\n   ' + dim('actual:  ' + current.phobos);
-      const m = await pickFromList(modelsScope, uniformPrompt, current.phobos);
-      setHistoryEntry('Modelo uniforme', m);
-      return Object.fromEntries(AGENTS.map(a => [a, m]));
-    }
-
-    if (index === 2) {
-      setHistoryEntry('Estrategia', 'Custom — agente por agente (multi-provider)');
-
-      // Sugerencias cross-provider — para el header del agente cuando hay
-      // múltiples providers detectados, el "modelo sugerido" debe considerar
-      // todos los providers, no solo el del filtro top-level.
-      const recommendedCross = hasMultipleProviders
-        ? Object.fromEntries(AGENTS.map(a => [a, recommendForAgent(a, allModels)]))
-        : recommended;
-
-      const target = {};
-      // Sticky default: el provider elegido para el agente anterior queda
-      // pre-seleccionado para el siguiente, ahorra clicks si vas a usar el
-      // mismo provider para varios agentes seguidos.
-      let stickyProvider = providerFilter;
-
-      for (let i = 0; i < AGENTS.length; i++) {
-        const agent = AGENTS[i];
-
-        // Render limpio: solo banner + wizard history previa (sin entries
-        // per-agent acumulándose). El screen muestra únicamente "N/6" actual.
-        renderWizardStep(
-          printModelsBanner,
-          history,
-          `[3/4] Asignar modelo · agente ${i + 1}/${AGENTS.length}: ${agent}`,
-        );
-
-        const headerBlock = agentHeaderBlock(
-          i, AGENTS.length, agent,
-          AGENT_PROFILES[agent].role,
-          current[agent],
-          recommendedCross[agent],
-        );
-        console.log(headerBlock);
-
-        // Sub-pregunta 1: ¿qué provider para este agente?
-        // Solo preguntamos si hay múltiples — con uno solo, lo asumimos.
-        let scopedModels = allModels;
-        if (hasMultipleProviders) {
-          const providerOptions = detectedProviders.map(p => {
-            const count = allModels.filter(m => getProvider(m) === p).length;
-            return `${p} (${count} modelos)`;
-          });
-          // Default: provider del modelo actual del agente, si no, el sticky
-          // del agente anterior, si no, el primero detectado.
-          const currentProviderForAgent = getProvider(current[agent] || '');
-          let defaultIdx = detectedProviders.indexOf(currentProviderForAgent);
-          if (defaultIdx < 0) defaultIdx = detectedProviders.indexOf(stickyProvider);
-          if (defaultIdx < 0) defaultIdx = 0;
-
-          const { index: provIdx } = await tuiSelect(
-            '\n¿Qué provider para este agente?',
-            providerOptions,
-            defaultIdx,
-          );
-          const chosenProvider = detectedProviders[provIdx];
-          scopedModels = allModels.filter(m => getProvider(m) === chosenProvider);
-          stickyProvider = chosenProvider;
-        }
-
-        // Sub-pregunta 2: ¿qué modelo dentro del provider elegido?
-        target[agent] = await pickFromList(scopedModels, `\nElegí modelo para @${agent}:`, current[agent]);
-      }
-
-      // Resumen del provider final — actualizamos la entry "Provider" para
-      // que refleje la realidad de los cambios (puede ser mono o mixto).
-      const finalProviders = new Set(AGENTS.map(a => getProvider(target[a])));
-      if (finalProviders.size === 1) {
-        setHistoryEntry('Provider', `${[...finalProviders][0]} (todos los agentes)`);
-      } else {
-        setHistoryEntry('Provider', `${finalProviders.size} providers (mixto)`);
-      }
-
-      return target;
-    }
-
-    // "Cambiar proveedor" — solo si hay múltiples; loop back al sub-step 3a
-    if (hasMultipleProviders && index === 3) {
-      continue;
-    }
-
-    // Cancelar y salir
-    return null;
+    const chosen = detectedProviders[provIdx];
+    const count = allModels.filter(m => getProvider(m) === chosen).length;
+    setHistoryEntry('Provider', `${chosen} (${count} modelos)`);
+    return chosen;
   }
+
+  // ─── Auto ──────────────────────────────────────────────────────────
+  if (index === 0) {
+    setHistoryEntry('Estrategia', 'Aplicar sugerencia automática');
+    const provider = await askProvider('[3/4] Asignar modelo · scope para la sugerencia');
+    if (!provider) return null;
+    const modelsScope = allModels.filter(m => getProvider(m) === provider);
+    // Re-calculamos las recomendaciones scopeadas al provider elegido — si
+    // tiene match, mejor; si no, cae al cross-provider de antes.
+    return Object.fromEntries(
+      AGENTS.map(a => [a, recommendForAgent(a, modelsScope) || recommendedCross[a]])
+    );
+  }
+
+  // ─── Uniform ───────────────────────────────────────────────────────
+  if (index === 1) {
+    setHistoryEntry('Estrategia', 'Mismo modelo para TODOS los agentes');
+    const provider = await askProvider('[3/4] Asignar modelo · scope del preset uniforme');
+    if (!provider) return null;
+    const modelsScope = allModels.filter(m => getProvider(m) === provider);
+    renderWizardStep(printModelsBanner, history, '[3/4] Asignar modelo · elegir modelo uniforme');
+    const uniformPrompt = '  ' + bold(cyan('Modelo para TODOS los agentes')) + '\n   ' + dim('actual:  ' + current.phobos);
+    const m = await pickFromList(modelsScope, uniformPrompt, current.phobos);
+    setHistoryEntry('Modelo uniforme', m);
+    return Object.fromEntries(AGENTS.map(a => [a, m]));
+  }
+
+  // ─── Custom (multi-provider, agente por agente) ────────────────────
+  if (index === 2) {
+    setHistoryEntry('Estrategia', 'Custom — agente por agente (multi-provider)');
+    const target = {};
+    // Sticky default: el provider elegido para el agente anterior queda
+    // pre-seleccionado para el siguiente; ahorra clicks si reutilizás el
+    // mismo provider en varios agentes seguidos.
+    let stickyProvider = detectedProviders[0];
+
+    for (let i = 0; i < AGENTS.length; i++) {
+      const agent = AGENTS[i];
+
+      // Screen limpio por agente: solo banner + wizard history previa.
+      // Las elecciones per-agent NO se acumulan en la history (para que
+      // siempre veas únicamente el agente N/6 actual).
+      renderWizardStep(
+        printModelsBanner,
+        history,
+        `[3/4] Asignar modelo · agente ${i + 1}/${AGENTS.length}: ${agent}`,
+      );
+
+      const headerBlock = agentHeaderBlock(
+        i, AGENTS.length, agent,
+        AGENT_PROFILES[agent].role,
+        current[agent],
+        recommendedCross[agent],
+      );
+      console.log(headerBlock);
+
+      // Sub-pregunta 1: ¿qué provider para este agente?
+      let scopedModels = allModels;
+      if (hasMultipleProviders) {
+        const providerOptions = detectedProviders.map(p => {
+          const count = allModels.filter(m => getProvider(m) === p).length;
+          return `${p} (${count} modelos)`;
+        });
+        // Default: provider del modelo actual del agente, si no, el sticky.
+        const currentProviderForAgent = getProvider(current[agent] || '');
+        let defaultIdx = detectedProviders.indexOf(currentProviderForAgent);
+        if (defaultIdx < 0) defaultIdx = detectedProviders.indexOf(stickyProvider);
+        if (defaultIdx < 0) defaultIdx = 0;
+
+        const { index: provIdx } = await tuiSelect(
+          '\n¿Qué provider para este agente?',
+          providerOptions,
+          defaultIdx,
+        );
+        const chosenProvider = detectedProviders[provIdx];
+        scopedModels = allModels.filter(m => getProvider(m) === chosenProvider);
+        stickyProvider = chosenProvider;
+      }
+
+      // Sub-pregunta 2: ¿qué modelo dentro del provider elegido?
+      target[agent] = await pickFromList(scopedModels, `\nElegí modelo para @${agent}:`, current[agent]);
+    }
+
+    // Resumen del provider final — refleja si quedó mono o mixto.
+    const finalProviders = new Set(AGENTS.map(a => getProvider(target[a])));
+    if (finalProviders.size === 1) {
+      setHistoryEntry('Provider', `${[...finalProviders][0]} (todos los agentes)`);
+    } else {
+      setHistoryEntry('Provider', `${finalProviders.size} providers (mixto)`);
+    }
+    return target;
+  }
+
+  // index === 3 → "Cancelar y salir"
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1010,7 +990,7 @@ export async function actionSetModels(agentDir) {
 // agente sin modificar nada. Útil para diagnosticar configuraciones antes
 // de tocarlas, ver qué provider domina, o auditar después de un cambio.
 export async function actionViewModels(agentDir) {
-  console.log('');
+  clearScreen();
   printModelsBanner();
   console.log('');
 
