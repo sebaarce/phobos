@@ -163,6 +163,15 @@ async function runMainMenu(agentDir) {
   }
 }
 
+// Red de seguridad: en raw mode Node intercepta Ctrl+C como keypress en vez
+// de SIGINT, así que cada TUI lo maneja a mano. Si por algún motivo un
+// listener no llegó a desregistrarse (zombie tras Esc en un sub-wizard),
+// este handler global garantiza que Ctrl+C siempre cierre limpio.
+process.on('SIGINT', () => {
+  console.log('\n' + dim('(salida)'));
+  finalizeAndExit(130);
+});
+
 async function main() {
   clearScreen();
   printHeader();

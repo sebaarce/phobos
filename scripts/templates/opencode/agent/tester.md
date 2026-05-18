@@ -57,6 +57,26 @@ permission:
     "bash -c *": ask
     "sh -c *": ask
     "node -e *": ask
+    # Package installation — corre postinstall scripts de dependencias.
+    "npm install*": ask
+    "npm i *": ask
+    "npm i": ask
+    "npm add *": ask
+    "pnpm install*": ask
+    "pnpm i *": ask
+    "pnpm i": ask
+    "pnpm add *": ask
+    "yarn add *": ask
+    "yarn install*": ask
+    "yarn": ask
+    "bun install*": ask
+    "bun add *": ask
+    "bun i *": ask
+    # Ejecución remota de paquetes — descargan y corren código de la red.
+    "npx *": ask
+    "pnpm dlx *": ask
+    "yarn dlx *": ask
+    "bunx *": ask
     # Confirm before executing
     "rm -rf*": ask
     "Remove-Item -Recurse*": ask
