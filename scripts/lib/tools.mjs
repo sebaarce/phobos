@@ -231,12 +231,12 @@ async function ensureCodeGraphHostManifest() {
   return { created: true };
 }
 
-// Wrapper de invocación del binario. Path absoluto (relativo al cwd) al
-// .bin/codegraph del install aislado. El agente usa este mismo path en su
-// allowlist; el wizard también lo usa para init/index.
-function codegraphBinArgs(...subcommand) {
-  return [CODEGRAPH_BIN, ...subcommand];
-}
+// Invocar el binario del install aislado.
+// `.bin/codegraph` es un wrapper script (.cmd en Windows, shell script en
+// Unix) — NO un módulo JS. Por eso `node <path>` falla con MODULE_NOT_FOUND.
+// La forma correcta es ejecutar el path directo y dejar que el shell resuelva
+// la extensión (.cmd vía PATHEXT en Windows; ejecuta el sh-bang en Unix).
+// `runChild` usa `shell: true`, así que esto funciona en ambas plataformas.
 
 export async function installCodeGraph() {
   console.log('\n' + cyan('▸ ') + bold('Instalar CodeGraph (índice semántico del código, install aislado)'));
@@ -275,7 +275,7 @@ export async function installCodeGraph() {
     }
     if (index === 0) {
       console.log(dim('\n  Re-indexando — puede tardar varios minutos en repos grandes.\n'));
-      const code = await runChild('node', codegraphBinArgs('index'), 'Re-indexar CodeGraph');
+      const code = await runChild(CODEGRAPH_BIN, ['index'], 'Re-indexar CodeGraph');
       if (code === 0) {
         console.log(green('\n  ✓ Re-indexación completa.\n'));
       } else {
@@ -336,12 +336,12 @@ export async function installCodeGraph() {
   // ─── Step 4/6: Inicializar config (.codegraph/config.json) ────────
   if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
     const initCode = await runChild(
-      'node', codegraphBinArgs('init'),
+      CODEGRAPH_BIN, ['init'],
       'Inicializar CodeGraph (.codegraph/config.json)',
     );
     if (initCode !== 0) {
       console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Probá manualmente:`));
-      console.log(dim('    ') + cyan(`node ${CODEGRAPH_BIN} init -i`));
+      console.log(dim('    ') + cyan(`${CODEGRAPH_BIN} init -i`));
       console.log('');
     } else {
       console.log(green('\n  ✓ Config generada en .codegraph/\n'));
@@ -366,25 +366,25 @@ export async function installCodeGraph() {
   );
   if (wantIndex) {
     const indexCode = await runChild(
-      'node', codegraphBinArgs('index'),
+      CODEGRAPH_BIN, ['index'],
       'Indexar el proyecto',
     );
     if (indexCode === 0) {
       console.log(green('\n  ✓ Indexación inicial completa.'));
     } else {
       console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
-      console.log(dim('    Reintentá con: ') + cyan(`node ${CODEGRAPH_BIN} index`));
+      console.log(dim('    Reintentá con: ') + cyan(`${CODEGRAPH_BIN} index`));
     }
   } else {
     console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
-    console.log(dim('    ') + cyan(`node ${CODEGRAPH_BIN} index`));
+    console.log(dim('    ') + cyan(`${CODEGRAPH_BIN} index`));
   }
 
   // ─── Resumen final ─────────────────────────────────────────────────
   console.log('');
   console.log(bold('  Próximos pasos:'));
-  console.log(dim('    · Probá una query:  ') + cyan(`node ${CODEGRAPH_BIN} query "..."`));
-  console.log(dim('    · Tests afectados:  ') + cyan(`node ${CODEGRAPH_BIN} affected <files>`));
+  console.log(dim('    · Probá una query:  ') + cyan(`${CODEGRAPH_BIN} query "..."`));
+  console.log(dim('    · Tests afectados:  ') + cyan(`${CODEGRAPH_BIN} affected <files>`));
   console.log(dim('    · El @researcher detectará la instalación automáticamente y usará CodeGraph'));
   console.log(dim('      antes de caer a rg/grep, a partir de la próxima task SDD.'));
   console.log('');
