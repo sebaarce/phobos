@@ -9,6 +9,7 @@ import { green, yellow, cyan, red, dim, bold, pad } from './colors.mjs';
 import { panel, tuiSelect, tuiYesNo } from './tui.mjs';
 import { printModelsBanner, renderWizardStep } from './banners.mjs';
 import { pressEnterToContinue } from './exit.mjs';
+import { backupAgents } from './update.mjs';
 
 function parseModelsList(output) {
   return output.split('\n')
@@ -820,21 +821,35 @@ export function printDiff(current, target) {
 }
 
 export async function applyChanges(agentDir, current, target) {
+  // Determinar primero qué agentes efectivamente cambian — backup-eamos solo
+  // esos para evitar copias inútiles y mantener el directorio de backup limpio.
+  const agentsToChange = AGENTS.filter(a => current[a] !== target[a]);
+
+  if (agentsToChange.length === 0) {
+    console.log(dim('\n  ⊘ No hay cambios para aplicar.'));
+    return { changed: 0, backup: null };
+  }
+
+  // Backup silencioso pre-escritura. Reusa el helper de update.mjs para
+  // mantener un solo formato de backup (`.opencode/agent_backup/phobos/<ts>/`)
+  // independientemente del wizard que lo dispare.
+  const filesToBackup = agentsToChange.map(a => `.opencode/agent/${a}.md`);
+  const backup = await backupAgents(filesToBackup);
+
   let changed = 0;
-  for (const agent of AGENTS) {
-    if (current[agent] !== target[agent]) {
-      try {
-        await writeModel(agentDir, agent, target[agent]);
-        changed++;
-      } catch (err) {
-        console.error(`  ${yellow('✗')} ${agent}: ${err.message}`);
-      }
+  for (const agent of agentsToChange) {
+    try {
+      await writeModel(agentDir, agent, target[agent]);
+      changed++;
+    } catch (err) {
+      console.error(`  ${yellow('✗')} ${agent}: ${err.message}`);
     }
   }
   console.log(green(`\n✓ ${changed} agente(s) actualizado(s).`));
   if (changed > 0) {
     console.log(dim('\nSi OpenCode está abierto, cambiá de agente (Tab) y volvé para recargar.'));
   }
+  return { changed, backup };
 }
 
 export async function actionSetModels(agentDir) {
@@ -895,14 +910,21 @@ export async function actionSetModels(agentDir) {
   renderWizardStep(printModelsBanner, history, '[4/4] Aplicar cambios');
   const hasChanges = printDiff(current, target);
 
+  let applyResult = null;
   if (hasChanges) {
     const confirm = await tuiYesNo('\n¿Aplicar los cambios?', false);
     if (confirm) {
-      await applyChanges(agentDir, current, target);
+      applyResult = await applyChanges(agentDir, current, target);
       history.push({
         label: 'Aplicado',
         value: `${agentsToChange.length} cambio${agentsToChange.length > 1 ? 's' : ''} persistido${agentsToChange.length > 1 ? 's' : ''} en .opencode/agent/`,
       });
+      if (applyResult?.backup?.backupRel) {
+        history.push({
+          label: 'Backup',
+          value: `${applyResult.backup.count} archivo${applyResult.backup.count > 1 ? 's' : ''} en ${applyResult.backup.backupRel}/`,
+        });
+      }
     } else {
       history.push({ label: 'Aplicado', value: 'Cancelado por el usuario, ningún archivo modificado' });
     }
@@ -914,6 +936,12 @@ export async function actionSetModels(agentDir) {
   // ─── Pantalla final con resumen completo ───────────────────────────
   renderWizardStep(printModelsBanner, history, '');
   console.log('  ' + green('Wizard completado.'));
+  if (applyResult?.backup?.backupRel) {
+    console.log('');
+    console.log('  ' + dim('↺ Backup previo de los archivos modificados:'));
+    console.log('    ' + cyan(applyResult.backup.backupRel + '/'));
+    console.log('  ' + dim('  Si querés revertir un cambio: ') + dim('copiá el archivo desde ese directorio al .opencode/agent/.'));
+  }
   await pressEnterToContinue();
 }
 

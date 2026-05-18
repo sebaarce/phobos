@@ -234,10 +234,12 @@ export async function runUpdateWizard(history, updates) {
 
 export async function backupAgents(filesToBackup) {
   // filesToBackup: array de paths relativos al cwd (ej: '.opencode/agent/phobos.md')
-  // Si está vacío, no hace nada.
+  // Si está vacío, no hace nada. Devuelve { backupRel, count } cuando crea backup;
+  // null cuando no había archivos que copiar (para que el caller pueda decidir
+  // si mostrar info al usuario).
   if (!filesToBackup || filesToBackup.length === 0) {
     console.log(dim('\n  ⊘ Backup omitido — no hay archivos que vayan a modificarse.'));
-    return;
+    return null;
   }
 
   const now = new Date();
@@ -271,6 +273,7 @@ export async function backupAgents(filesToBackup) {
 
   console.log(green(`\n  ✓ Backup creado: `) + cyan(backupRel + '/'));
   console.log(dim(`    ${copied} archivo(s) copiados: ${names.join(', ')}`));
+  return { backupRel, count: copied, files: names };
 }
 
 export async function runUpdateAll(updates) {
