@@ -316,7 +316,7 @@ export async function getFinalModelList(detected) {
   return list;
 }
 
-function showCurrentStatus(current) {
+export function showCurrentStatus(current) {
   const wAgent = Math.max(...AGENTS.map(a => a.length));
   const wRole = Math.max(...AGENTS.map(a => AGENT_PROFILES[a].role.length));
   const wModel = Math.max(...AGENTS.map(a => (current[a] || '').length));
@@ -914,5 +914,57 @@ export async function actionSetModels(agentDir) {
   // ─── Pantalla final con resumen completo ───────────────────────────
   renderWizardStep(printModelsBanner, history, '');
   console.log('  ' + green('Wizard completado.'));
+  await pressEnterToContinue();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Ver configuración (read-only)
+// ═══════════════════════════════════════════════════════════════════
+
+// Acción read-only del menú principal: imprime el estado actual de cada
+// agente sin modificar nada. Útil para diagnosticar configuraciones antes
+// de tocarlas, ver qué provider domina, o auditar después de un cambio.
+export async function actionViewModels(agentDir) {
+  console.log('');
+  printModelsBanner();
+  console.log('');
+
+  const current = await readCurrentModels(agentDir);
+
+  // Tabla agente → rol → modelo (reusa el renderer del wizard).
+  showCurrentStatus(current);
+
+  // Distribución por provider — útil para detectar "está todo en un solo
+  // proveedor" vs "está mezclado" sin tener que escanear visualmente.
+  const byProvider = {};
+  for (const agent of AGENTS) {
+    const model = current[agent] || '(no detectado)';
+    const provider = getProvider(model);
+    if (!byProvider[provider]) byProvider[provider] = [];
+    byProvider[provider].push(agent);
+  }
+
+  const providerEntries = Object.entries(byProvider).sort();
+  const wProvider = Math.max(...providerEntries.map(([p]) => p.length));
+  const providerLines = providerEntries.map(([p, agents]) =>
+    cyan(' ▸ ') + bold(pad(p, wProvider)) + dim('   →   ') + agents.join(', ')
+  );
+
+  console.log('');
+  panel('Distribución por provider', providerLines);
+
+  // Cantidad total de agentes por estado.
+  const total = AGENTS.length;
+  const configured = AGENTS.filter(a => current[a] && !current[a].startsWith('(')).length;
+  const unconfigured = total - configured;
+
+  console.log('');
+  console.log('  ' + dim(`${configured}/${total} agentes con modelo configurado`)
+    + (unconfigured > 0 ? '  ' + yellow(`(${unconfigured} sin detectar)`) : ''));
+
+  console.log('');
+  console.log(dim('  Para cambiar modelos: menú principal → "Setear modelos de agentes".'));
+  console.log('');
+
   await pressEnterToContinue();
 }

@@ -32,7 +32,7 @@ import { WIZARD_CANCELLED, finalizeAndExit, runAction } from './lib/exit.mjs';
 import { tuiSelect } from './lib/tui.mjs';
 import { ensureBootstrap } from './lib/bootstrap.mjs';
 import { scanForUpdates, actionUpdateAgents } from './lib/update.mjs';
-import { actionSetModels } from './lib/models.mjs';
+import { actionSetModels, actionViewModels } from './lib/models.mjs';
 import { actionInstallTools } from './lib/tools.mjs';
 import { actionMemory } from './lib/memory/index.mjs';
 import { detectQdrantStatus } from './lib/memory/engine.mjs';
@@ -130,6 +130,7 @@ async function runMainMenu(agentDir) {
         '\n¿Qué querés hacer?',
         [
           updateLabel,
+          'Ver configuración de modelos',
           'Setear modelos de agentes',
           'Instalar herramientas',
           memoryLabel,
@@ -146,12 +147,14 @@ async function runMainMenu(agentDir) {
     if (index === 0) {
       await runAction(() => actionUpdateAgents());
     } else if (index === 1) {
-      await runAction(() => actionSetModels(agentDir));
+      await runAction(() => actionViewModels(agentDir));
     } else if (index === 2) {
-      await runAction(() => actionInstallTools());
+      await runAction(() => actionSetModels(agentDir));
     } else if (index === 3) {
-      await runAction(() => actionMemory());
+      await runAction(() => actionInstallTools());
     } else if (index === 4) {
+      await runAction(() => actionMemory());
+    } else if (index === 5) {
       clearScreen();
       showHappyGoodbye();
       finalizeAndExit(0);
