@@ -48,6 +48,7 @@ export const BOOTSTRAP_GROUPS = {
     'opencode/command/adapt-agents.md',
     'opencode/command/models-wizard.md',
     'opencode/command/reindex-memory.md',
+    'opencode/command/reindex-codegraph.md',
     'opencode/command/list-memory.md',
   ],
   vault: [
