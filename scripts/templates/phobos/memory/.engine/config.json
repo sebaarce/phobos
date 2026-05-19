@@ -24,7 +24,8 @@
     "roots": [
       "vault/memory/insights",
       "vault/memory/wiki",
-      "vault/memory/glossary"
+      "vault/memory/glossary",
+      "vault/memory/research-queries"
     ]
   }
 }

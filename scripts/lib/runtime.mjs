@@ -59,6 +59,10 @@ export const BOOTSTRAP_GROUPS = {
     'vault/memory/insights/.gitkeep',
     'vault/memory/wiki/.gitkeep',
     'vault/memory/glossary/.gitkeep',
+    // research-queries/ — preguntas casuales del usuario (research-only sin task formal).
+    // Direct researcher escribe acá; no van a TASKS.md ## Current.
+    // Pueden "promoverse" a task formal vía archivist mode "Promote query to task".
+    'vault/memory/research-queries/.gitkeep',
   ],
 };
 

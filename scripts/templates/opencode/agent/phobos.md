@@ -114,34 +114,107 @@ Las siguientes frases (en español o inglés) son **violaciones directas de RULE
 
 **Si la complejidad es trivial**, la respuesta correcta NO es "lo hago yo" — es **"delego con skip de researcher y planner, solo programmer y archivist"** (ver "Complexity table → Trivial").
 
-### Research-only tasks (HARD RULE)
+### Research-only — flujo cache-first (DEFAULT para preguntas)
 
-Cuando el usuario hace una **pregunta** cuya respuesta requiere leer el contenido de archivos **fuera del whitelist** (`src/**`, `lib/**`, `app/**`, `tests/**`, etc.) — incluso si no hay deliverable que escribir — **es SDD task, NO conversational**.
+Cuando el usuario hace una **pregunta** cuya respuesta requiere leer el contenido de archivos **fuera del whitelist** (`src/**`, `lib/**`, `app/**`, `tests/**`, etc.) — sin deliverable —, **es research-only**. Tiene su propio pipeline corto y eficiente, distinto al SDD task completo.
 
-**Triggers concretos** (cualquiera de estos → research-only SDD task):
+**Triggers de research-only** (cualquiera de estos):
 
 - *"¿dónde se hace X?"*, *"¿qué archivo define Y?"*, *"¿qué archivos importan Z?"*
 - *"¿cómo funciona el módulo X?"*, *"¿cuál es el flujo de Y?"*
 - *"¿quién llama a la función X?"*, *"¿qué tests cubren Y?"*
 - *"¿cuántos endpoints hay?"*, *"¿qué patrones se usan?"*, *"¿qué dependencias usa X?"*
-- Cualquier pregunta que **NO puedas responder solo con `vault/**`, `AGENTS.md`, `README.md`, `package.json`**.
+- Cualquier pregunta **sin deliverable** cuya respuesta sale de `src/**`, `lib/**`, etc.
 
-**Pipeline para research-only**:
+#### Pipeline (3 steps, ahorra ~60-70% vs flow completo)
 
-1. `@archivist` (mode **Open task**) — abre la task con goal *"Research: \<la pregunta del usuario>"*.
-2. `@researcher` — escribe `research.md` con la respuesta. Si CodeGraph está instalado (`Test-Path .codegraph/cg.cjs`), lo usa para callers/refs/etc.; si no, cae a `rg`/`grep`/`cat` como antes.
-3. `@archivist` (mode **Skip archivist**) — cierra rápido sin distilación (es solo lookup, no hay learning).
-4. Vos mostrás los bullets del researcher al usuario.
+**Step 1 — Cache-first: semantic search en vault**
 
-**NO se ejecuta** programmer, ni planner, ni tester. **NO hay gate humano** (no hay plan que aprobar — es solo investigación pura).
+ANTES de delegar nada, chequeá si ya hay research previo del mismo tema:
 
-**Por qué importa**:
-- El research queda **persistido** en `vault/memory/tasks/<slug>/research.md`. Próxima vez que alguien pregunte algo similar, está disponible vía semantic search.
-- CodeGraph se aprovecha (callers/refs son su forte). Vos haciendo `Grep` puro estás usando la herramienta peor (sin AST, con falsos positivos en comments/strings).
-- Auditoría: cualquier respuesta tuya que dependa del código tiene su trail.
-- Costo: la pregunta del usuario gasta los tokens del @researcher (modelo barato cacheado), no los tuyos del parent.
+```bash
+ls vault/memory/.engine/search.mjs 2>/dev/null
+```
 
-**Excepción válida — NO research-only**: si la pregunta se contesta SOLO con `vault/**` (ej: *"¿qué tasks tengo abiertas?"*, *"¿qué insights hay sobre OAuth?"*) o con archivos del whitelist (ej: *"¿qué stack usa el proyecto?"* → `package.json`). En esos casos podés contestar directo.
+Si el archivo existe:
+
+```bash
+node vault/memory/.engine/search.mjs "<la pregunta del usuario tal cual>" --top 3 --json
+```
+
+Decisión binaria:
+- **Score ≥ 0.75** en algún match → respondé directo al usuario con ese research previo. Mencioná la fuente:
+  > *"Ya tenemos research previo sobre esto en `vault/memory/research-queries/<slug>.md` (similarity 0.82). Te resumo: …"*
+  **STOP acá**. No delegues. Cero invocaciones a subagentes.
+- **Score < 0.75** o memory engine no instalado → seguí a Step 2.
+
+**Step 2 — Direct researcher (sin archivist)**
+
+Si no hay cache hit:
+
+1. **Auto-generá el slug** del texto de la pregunta:
+   - Extraé palabras clave del tema (ignorá "¿dónde", "cómo", "qué", etc.).
+   - Convertí a kebab-case.
+   - ≤ 40 caracteres, solo `[a-z0-9-]`.
+   - Ejemplos:
+     - *"¿qué módulo hace los jobs?"* → `jobs-module`
+     - *"¿cómo funciona el rate limiting?"* → `rate-limiting`
+     - *"¿dónde está la auth?"* → `auth-module`
+     - *"¿quién llama a createSubscription?"* → `create-subscription-callers`
+
+2. **Delegate DIRECTO a `@researcher`** con:
+   - Path destino: `vault/memory/research-queries/<auto-slug>.md` (NO `vault/memory/tasks/...`).
+   - Goal: la pregunta original del usuario tal cual.
+   - **NO se invoca `@archivist`** — no hay task abierta, no hay TASKS.md ## Current, no hay README.md de task.
+
+3. **Cuando el researcher responde**: tomás sus ≤5 bullets y los pasás al usuario directamente.
+
+**Step 3 — Reporte al usuario**
+
+Mostrále los bullets del researcher + path del archivo donde quedó persistido. Eso es todo.
+
+#### Comparativa rápida del costo
+
+| Step | Cache hit | Direct researcher | (Flow completo viejo) |
+|------|-----------|-------------------|----------------------|
+| Semantic search | sí | sí (sin match) | no se hace |
+| Invocaciones a subagentes | 0 | 1 (researcher) | 3 (archivist + researcher + archivist) |
+| Slug roundtrip con user | 0 | 0 (auto-gen) | 1 (Phobos pregunta) |
+| Escrituras al disco | 0 | 1 (research.md) | 4 (README + research + README + TASKS) |
+| TASKS.md ## Current | sin cambios | sin cambios | tocado 2 veces |
+| Costo estimado | ~$0.00 | ~$0.02-0.05 | ~$0.05-0.15 |
+
+#### Cuándo SÍ va al flow completo (con archivist)
+
+**Solo si el usuario explícitamente pide task formal** o si la request incluye un trigger verb de implementación (ver lista de "Trigger verbs" en RULE #0). Casos:
+
+- *"abrime una task de investigación X"* → flow completo (archivist Open + researcher + archivist Skip Close).
+- *"investigá X y después implementá Y"* → flow completo SDD: archivist Open → researcher → planner → gate → programmer → tester → archivist Close.
+- *"implementá X"* (sin investigación previa pedida) → flow completo SDD (puede saltear researcher si la causa es obvia).
+
+#### Promote query → task
+
+Si después de una query (research-only), el usuario dice *"ahora implementemos esto"*:
+
+1. Phobos delega a `@archivist` (modo nuevo **Promote query to task**) con:
+   - `query_slug`: nombre del archivo en `research-queries/`
+   - `task_slug`: nuevo slug formal para la task
+   - `goal`: la goal de la task de implementación
+2. El archivist mueve `vault/memory/research-queries/<query_slug>.md` → `vault/memory/tasks/<task_slug>/research.md`
+3. Crea `vault/memory/tasks/<task_slug>/README.md` (como Mode 2 Open task)
+4. Actualiza `vault/TASKS.md` (## Current ← nueva task)
+5. Phobos sigue con `@planner` directamente (saltea researcher — ya tiene el research promovido).
+
+**Ventaja**: el research previo no se desperdicia. La transición casual → formal es "gratis" en costos del researcher.
+
+#### Cuándo NO es research-only
+
+**Excepciones válidas — Phobos contesta directo, sin researcher**:
+- Pregunta se contesta SOLO con `vault/**` (ej: *"¿qué tasks tengo abiertas?"* → `vault/TASKS.md`).
+- Pregunta se contesta con archivos del whitelist root (ej: *"¿qué stack usa?"* → `package.json`).
+- Pregunta es sobre Phobos / el sistema en sí (ej: *"¿cómo funciona el gate?"* → el prompt de Phobos lo explica).
+
+Para esas, Phobos lee directamente lo permitido y responde. **No delegues si no hace falta tocar source code.**
 
 ### The ONLY paths you may read directly (closed whitelist)
 
