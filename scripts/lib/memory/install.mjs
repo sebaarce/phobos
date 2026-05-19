@@ -1,9 +1,7 @@
 // Wizard de instalación de Memory.
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { TEMPLATES_DIR, rl } from '../runtime.mjs';
-import { cyan, dim, yellow, red, green, bold } from '../colors.mjs';
-import { tuiSelect, tuiYesNo } from '../tui.mjs';
+import { rl } from '../runtime.mjs';
+import { cyan, dim, yellow, red, green } from '../colors.mjs';
+import { tuiYesNo } from '../tui.mjs';
 import { runChild } from '../child.mjs';
 import { printMemoryBanner, renderWizardStep } from '../banners.mjs';
 import { pressEnterToContinue } from '../exit.mjs';
@@ -19,11 +17,6 @@ import {
 } from './engine.mjs';
 import {
   checkCommand,
-  readPackageJson,
-  detectPackageManager,
-  detectProblematicStack,
-  checkNpmrcHasLegacyPeerDeps,
-  addLegacyPeerDepsToNpmrc,
   verifyMemoryDepsInstalled,
   installMemoryDepsWithRetry,
 } from './deps.mjs';
@@ -40,21 +33,24 @@ export async function actionInstallMemory(adapter) {
   const history = [];
 
   // ─── Step 1/6: Verificar prerequisitos ──────────────────────────────
+  // Solo requerimos docker (para Qdrant) y node (para correr los scripts del
+  // engine). El proyecto host NO necesita ser Node — las deps de Memory se
+  // instalan aisladas en vault/memory/.engine/node_modules/ (mismo patrón que
+  // CodeGraph). Esto permite que Memory funcione en proyectos Rails, Python,
+  // Go, Java, etc.
   renderWizardStep(printMemoryBanner, history, '[1/6] Verificar prerequisitos');
 
   const dockerOK = checkCommand('docker');
   const nodeOK = checkCommand('node');
-  const pkg = await readPackageJson();
 
   console.log('  ' + (dockerOK ? green('✓') : red('✗')) + ' docker');
   console.log('  ' + (nodeOK ? green('✓') : red('✗')) + ' node');
-  console.log('  ' + (pkg ? green('✓') : red('✗')) + ' package.json (proyecto Node)');
+  console.log('  ' + dim('  (el proyecto host no necesita ser Node — Memory se instala aislado)'));
 
-  if (!dockerOK || !nodeOK || !pkg) {
+  if (!dockerOK || !nodeOK) {
     console.log('');
     if (!dockerOK) console.log('  ' + yellow('Docker es necesario para correr Qdrant local. Instalalo desde docker.com/get-started'));
     if (!nodeOK) console.log('  ' + yellow('Node es necesario para el engine de embeddings.'));
-    if (!pkg) console.log('  ' + yellow('El proyecto destino debe tener package.json (Node/TS). Memory no aplica a otros stacks.'));
     history.push({ label: 'Prerequisitos', value: 'Faltantes — wizard cancelado' });
     renderWizardStep(printMemoryBanner, history, '');
     console.log('  ' + yellow('No se puede continuar. Resolvé los prerequisitos y reintentá.'));
@@ -62,13 +58,15 @@ export async function actionInstallMemory(adapter) {
     return;
   }
 
-  history.push({ label: 'Prerequisitos', value: 'docker ✓, node ✓, package.json ✓' });
+  history.push({ label: 'Prerequisitos', value: 'docker ✓, node ✓' });
 
-  // ─── Step 2/6: Detección de Qdrant global + package manager ─────────
-  renderWizardStep(printMemoryBanner, history, '[2/6] Detectar Qdrant global y package manager');
+  // ─── Step 2/6: Detección de Qdrant global + collection + agentes ────
+  // No detectamos problematic-stacks ni leemos .npmrc del proyecto — el
+  // install aislado tiene su propio .npmrc con legacy-peer-deps=true,
+  // así que esas heurísticas dejaron de aplicar.
+  renderWizardStep(printMemoryBanner, history, '[2/6] Detectar Qdrant global y collection');
 
   const qdrant = await detectQdrantStatus();
-  const pm = await detectPackageManager();
 
   // Resolver collection con detección de colisiones. Si hay otro proyecto con el
   // mismo basename ("backend", "frontend", "api"), el resolver ofrece un nombre
@@ -87,22 +85,14 @@ export async function actionInstallMemory(adapter) {
 
   const agentSupport = await detectAgentsHaveMemorySupport(adapter);
   const agentsReady = agentSupport.researcherOK && agentSupport.archivistOK;
-  const problemStacks = await detectProblematicStack();
-  const npmrcHasFlag = await checkNpmrcHasLegacyPeerDeps();
 
   console.log('  ' + dim('Qdrant global: ') + (
     qdrant.containerRunning && qdrant.healthy ? green('✓ corriendo y healthy en ' + QDRANT_URL)
     : qdrant.containerRunning ? yellow('⚠ contenedor up pero sin responder a /healthz aún')
     : dim('— no está corriendo (se levantará en el paso 5)')
   ));
-  console.log('  ' + dim('Package manager: ') + cyan(pm));
-  console.log('  ' + dim('Stack detectado: ')
-    + (problemStacks.length > 0
-        ? yellow(problemStacks.join(', ') + ' — suele requerir --legacy-peer-deps')
-        : dim('sin stacks con issues conocidos de peer-deps')));
-  if (problemStacks.length > 0 && npmrcHasFlag) {
-    console.log('  ' + dim('  .npmrc del proyecto ya tiene ') + green('legacy-peer-deps=true') + dim(' ✓'));
-  }
+  console.log('  ' + dim('Install mode: ') + cyan('aislado en vault/memory/.engine/')
+    + dim('  (no toca el package.json del proyecto)'));
   console.log('  ' + dim('Collection name: ') + cyan(collectionName));
   console.log('  ' + dim('Global compose: ') + cyan(QDRANT_COMPOSE_GLOBAL));
   console.log('  ' + dim('Agentes preparados para Memory: ')
@@ -135,7 +125,7 @@ export async function actionInstallMemory(adapter) {
 
   history.push({
     label: 'Estado inicial',
-    value: `Qdrant ${qdrant.healthy ? 'corriendo' : 'no corriendo'} · pm=${pm} · agentes ${agentsReady ? 'OK' : 'outdated'}`,
+    value: `Qdrant ${qdrant.healthy ? 'corriendo' : 'no corriendo'} · install aislado · agentes ${agentsReady ? 'OK' : 'outdated'}`,
   });
 
   const proceedPrompt = agentsReady
@@ -159,106 +149,10 @@ export async function actionInstallMemory(adapter) {
     return;
   }
 
-  // ─── Step 3/6: Instalar dependencias npm ────────────────────────────
-  renderWizardStep(printMemoryBanner, history, '[3/6] Instalar dependencias del proyecto');
-
-  const depsRaw = await readFile(join(TEMPLATES_DIR, 'phobos/memory/package-deps.json'), 'utf-8');
-  const depsJson = JSON.parse(depsRaw);
-  const depList = Object.entries(depsJson.dependencies).map(([n, v]) => `${n}@${v}`);
-  console.log('  Instalando: ' + cyan(depList.join(', ')));
-  console.log(dim('  (paquetes incluyen binarios nativos onnxruntime ~50-80 MB)'));
-
-  // Pre-check: si las deps ya estaban instaladas (re-run del wizard), saltamos
-  const preCheck = await verifyMemoryDepsInstalled();
-  let installSummary;
-  let usedLegacyPeerDeps = false;
-
-  if (preCheck.ok) {
-    console.log('');
-    console.log('  ' + green('✓ Ambos paquetes ya están en node_modules — salteando install.'));
-    installSummary = `Ya instalados (reusados de instalación previa)`;
-  } else {
-    // Si detectamos stack problemático + npm + sin flag persistida → preguntar
-    // si arrancar el install con --legacy-peer-deps desde el primer intento.
-    let initialFlags = [];
-    if (problemStacks.length > 0 && pm === 'npm' && !npmrcHasFlag) {
-      console.log('');
-      console.log('  ' + yellow('⚠ Detecté ') + bold(problemStacks.join(', '))
-        + yellow(' en el proyecto.'));
-      console.log('  ' + dim('   Estos stacks suelen tener conflictos de peer dependencies (ERESOLVE)'));
-      console.log('  ' + dim('   en NPM v7+. La flag ') + cyan('--legacy-peer-deps')
-        + dim(' soluciona esto sin tocar tu árbol de deps.'));
-      console.log('');
-
-      const stackChoice = await tuiSelect(
-        '¿Cómo arrancar el install?',
-        [
-          'npm install ' + green('--legacy-peer-deps') + dim('  (recomendado para ' + problemStacks[0] + ')'),
-          'npm install (sin flags — puede fallar si hay conflictos preexistentes)',
-        ],
-        0,
-      );
-      if (stackChoice.index === 0) {
-        initialFlags = ['--legacy-peer-deps'];
-        usedLegacyPeerDeps = true;
-      }
-    } else if (npmrcHasFlag) {
-      // El .npmrc ya tiene la flag — npm la va a aplicar automáticamente
-      usedLegacyPeerDeps = true;
-    }
-
-    const result = await installMemoryDepsWithRetry(pm, depList, initialFlags);
-    if (!result.ok) {
-      history.push({ label: 'Dependencias', value: `Falló — faltan: ${result.missing.join(', ')}` });
-      renderWizardStep(printMemoryBanner, history, '');
-      console.log('  ' + red('✗ No se pudieron instalar las dependencias.'));
-      console.log('');
-      console.log('  ' + dim('  Probá manualmente:'));
-      console.log('    ' + cyan(`${pm} ${pm === 'npm' ? 'install' : 'add'} ${depList.join(' ')}${problemStacks.length > 0 ? ' --legacy-peer-deps' : ''}`));
-      console.log('  ' + dim('  Cuando estén instaladas, volvé a entrar a "Memory (RAG)".'));
-      await pressEnterToContinue();
-      return;
-    }
-    // Detectar si el install terminó usando --legacy-peer-deps (por initialFlags
-    // o porque el usuario la eligió en el retry menu)
-    if (result.usedFlags && result.usedFlags.includes('--legacy-peer-deps')) {
-      usedLegacyPeerDeps = true;
-    }
-    const flagsApplied = result.usedFlags?.length ? ' ' + result.usedFlags.join(' ') : '';
-    const pmApplied = result.usedPm || pm;
-    installSummary = result.exitCode === 0
-      ? `${depList.length} paquetes instalados con ${pmApplied}${flagsApplied}`
-      : `${depList.length} paquetes instalados (exit ${result.exitCode}, warnings ignorados)`;
-  }
-  history.push({ label: 'Dependencias', value: installSummary });
-
-  // Si usamos --legacy-peer-deps (manual o desde retry) y .npmrc no lo tiene,
-  // ofrecer persistirla para que futuros installs no fallen.
-  if (usedLegacyPeerDeps && !npmrcHasFlag && pm === 'npm') {
-    console.log('');
-    console.log('  ' + dim('Tu instalación necesitó ') + cyan('--legacy-peer-deps') + dim('.'));
-    console.log('  ' + dim('Para que futuros ') + cyan('npm install') + dim(' no fallen por el mismo motivo,'));
-    console.log('  ' + dim('te conviene persistir la flag en el ') + cyan('.npmrc') + dim(' del proyecto.'));
-    console.log('');
-    const persist = await tuiYesNo(
-      `¿Agregar ${cyan('legacy-peer-deps=true')} al ${cyan('.npmrc')} del proyecto?`,
-      true,
-    );
-    if (persist) {
-      const r = await addLegacyPeerDepsToNpmrc();
-      if (r.added) {
-        console.log('  ' + green('✓ .npmrc actualizado'));
-        history.push({ label: '.npmrc', value: 'legacy-peer-deps=true agregado al .npmrc' });
-      } else {
-        console.log('  ' + dim('  · .npmrc ya tenía la flag — no se modificó'));
-      }
-    } else {
-      console.log('  ' + dim('  · saltado. Vas a tener que pasar --legacy-peer-deps en futuros installs.'));
-    }
-  }
-
-  // ─── Step 4/6: Copiar engine al proyecto ────────────────────────────
-  renderWizardStep(printMemoryBanner, history, '[4/6] Copiar engine al proyecto');
+  // ─── Step 3/6: Copiar engine al proyecto ────────────────────────────
+  // Tiene que ir ANTES del install de deps: el package.json y el .npmrc
+  // aislados se copian acá, y el install los necesita.
+  renderWizardStep(printMemoryBanner, history, '[3/6] Copiar engine al proyecto');
 
   await copyMemoryEngineToProject(collectionName);
   await appendGitignoreSnippet();
@@ -266,6 +160,52 @@ export async function actionInstallMemory(adapter) {
     label: 'Engine',
     value: `${MEMORY_ENGINE_FILES.length} archivos en vault/memory/.engine/ · collection=${collectionName}`,
   });
+
+  // ─── Step 4/6: Instalar dependencias aisladas en .engine/ ────────────
+  // Corre con cwd=vault/memory/.engine/. El package.json y .npmrc están ahí
+  // (copiados en el step anterior). El proyecto host queda intacto.
+  renderWizardStep(printMemoryBanner, history, '[4/6] Instalar deps aisladas en vault/memory/.engine/');
+
+  console.log('  ' + dim('Install: ') + cyan('npm install') + dim('  (cwd=vault/memory/.engine/)'));
+  console.log('  ' + dim('Deps: @xenova/transformers, @qdrant/js-client-rest, onnxruntime-node'));
+  console.log('  ' + dim('  (paquetes incluyen binarios nativos onnxruntime ~50-80 MB)'));
+
+  // Pre-check: si las deps ya estaban instaladas (re-run del wizard, o legacy
+  // install en el project root), saltamos.
+  const preCheck = await verifyMemoryDepsInstalled();
+  let installSummary;
+
+  if (preCheck.ok) {
+    console.log('');
+    if (preCheck.location === 'project') {
+      console.log('  ' + green('✓ Deps detectadas en node_modules/ del proyecto (instalación legacy) — reutilizándolas.'));
+      console.log('  ' + dim('    Para migrar al patrón aislado, borrá las deps del package.json del proyecto y reintentá.'));
+      installSummary = 'Reutilizando install legacy (project root)';
+    } else {
+      console.log('  ' + green('✓ Deps ya instaladas en vault/memory/.engine/node_modules/ — saltando install.'));
+      installSummary = 'Reutilizando install aislado previo';
+    }
+  } else {
+    // En el install aislado siempre usamos npm — está garantizado con Node,
+    // y el .npmrc local fuerza la buena conducta (hoisted, legacy-peer-deps).
+    const result = await installMemoryDepsWithRetry('npm');
+    if (!result.ok) {
+      history.push({ label: 'Dependencias', value: `Falló — faltan: ${result.missing.join(', ')}` });
+      renderWizardStep(printMemoryBanner, history, '');
+      console.log('  ' + red('✗ No se pudieron instalar las dependencias aisladas.'));
+      console.log('');
+      console.log('  ' + dim('  Probá manualmente desde el dir aislado:'));
+      console.log('    ' + cyan('cd vault/memory/.engine && npm install'));
+      console.log('  ' + dim('  Cuando estén instaladas, volvé a entrar a "Memory (RAG)".'));
+      await pressEnterToContinue();
+      return;
+    }
+    const flagsApplied = result.usedFlags?.length ? ' ' + result.usedFlags.join(' ') : '';
+    installSummary = result.exitCode === 0
+      ? `Instalado con npm${flagsApplied} en vault/memory/.engine/`
+      : `Instalado (exit ${result.exitCode}, warnings ignorados) en vault/memory/.engine/`;
+  }
+  history.push({ label: 'Dependencias', value: installSummary });
 
   // ─── Step 5/6: Preparar Qdrant GLOBAL ───────────────────────────────
   renderWizardStep(printMemoryBanner, history, '[5/6] Preparar Qdrant global en ~/.phobos/');

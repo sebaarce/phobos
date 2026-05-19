@@ -26,6 +26,11 @@ export const MEMORY_ENGINE_FILES = [
   { src: 'phobos/memory/.engine/list-memory.mjs',     dst: 'vault/memory/.engine/list-memory.mjs' },
   { src: 'phobos/memory/.engine/costs.mjs',           dst: 'vault/memory/.engine/costs.mjs' },
   { src: 'phobos/memory/.engine/README.md',           dst: 'vault/memory/.engine/README.md' },
+  // Manifest aislado + npmrc — habilitan el install standalone (sin
+  // requerir que el proyecto host tenga package.json/node_modules). Mismo
+  // patrón que CodeGraph en .codegraph/.
+  { src: 'phobos/memory/.engine/package.json',        dst: 'vault/memory/.engine/package.json' },
+  { src: 'phobos/memory/.engine/.npmrc',              dst: 'vault/memory/.engine/.npmrc' },
 ];
 
 // Estado de Qdrant global. Devuelve { containerRunning, healthy }.
@@ -196,12 +201,32 @@ export async function appendGitignoreSnippet() {
   const gitignorePath = join(cwd(), '.gitignore');
   let existing = '';
   try { existing = await readFile(gitignorePath, 'utf-8'); } catch {}
-  if (existing.includes('vault/memory/.engine/.index-state.json')) {
-    console.log(dim('  · .gitignore ya tiene la entrada de memory.'));
+
+  // Check explícito por cada entrada canónica para soportar el upgrade del
+  // snippet (usuarios que tienen .index-state.json pero no node_modules/).
+  const hasStateEntry = existing.includes('vault/memory/.engine/.index-state.json');
+  const hasNodeModulesEntry = existing.includes('vault/memory/.engine/node_modules/');
+
+  if (hasStateEntry && hasNodeModulesEntry) {
+    console.log(dim('  · .gitignore ya tiene las entradas de memory.'));
     return;
   }
-  const joined = (existing.trim() + '\n\n' + snippet.trim() + '\n').replace(/^\s+/, '');
+
+  // Faltan entradas: agregamos solo lo que falta para no duplicar.
+  const linesToAdd = [];
+  if (!hasStateEntry) {
+    linesToAdd.push('# Phobos memory engine — local-only state');
+    linesToAdd.push('vault/memory/.engine/.index-state.json');
+  }
+  if (!hasNodeModulesEntry) {
+    if (linesToAdd.length > 0) linesToAdd.push('');
+    linesToAdd.push('# Phobos memory engine — install aislado (deps locales, no se commitean).');
+    linesToAdd.push('vault/memory/.engine/node_modules/');
+  }
+
+  const joined = (existing.trim() + '\n\n' + linesToAdd.join('\n') + '\n').replace(/^\s+/, '');
   // .gitignore vive en cwd → safeWriteFile valida sandbox + symlinks.
   await safeWriteFile('.gitignore', joined);
-  console.log(dim('  · .gitignore actualizado con .index-state.json'));
+  const addedCount = (hasStateEntry ? 0 : 1) + (hasNodeModulesEntry ? 0 : 1);
+  console.log(dim(`  · .gitignore actualizado (${addedCount} entrada${addedCount > 1 ? 's' : ''} de memory)`));
 }

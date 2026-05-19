@@ -1,4 +1,11 @@
-// Detección + instalación de deps de Memory (npm, peer-deps, etc).
+// Detección + instalación de deps de Memory.
+//
+// Patrón: install AISLADO en vault/memory/.engine/ (no toca el proyecto host).
+// Esto permite que Memory funcione en cualquier stack — Rails, Python, Go,
+// Java — no solo en proyectos Node. Mismo patrón que .codegraph/cg.cjs.
+//
+// La resolución de imports de los engine scripts (.mjs) sube buscando
+// node_modules/, así que find ahí mismo el isolated install sin shim extra.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cwd, platform } from 'node:process';
@@ -7,6 +14,10 @@ import { rl } from '../runtime.mjs';
 import { cyan, dim, bold, green, yellow, red } from '../colors.mjs';
 import { tuiSelect } from '../tui.mjs';
 import { runChild } from '../child.mjs';
+
+// Path del install aislado. Si esto cambia, también cambian las entradas en
+// MEMORY_ENGINE_FILES y los comandos sugeridos al usuario.
+export const MEMORY_ENGINE_DIR = 'vault/memory/.engine';
 
 export function checkCommand(cmd) {
   // Run with shell:true so PATH resolution works on Windows.
@@ -79,27 +90,50 @@ export async function addLegacyPeerDepsToNpmrc() {
 // exit code != 0 por warnings o por descargas parciales pero igual dejar los
 // paquetes utilizables. Chequeamos también onnxruntime-node porque algunos
 // package managers saltan optional deps y eso rompe el engine al runtime.
+//
+// Busca primero en el install AISLADO (vault/memory/.engine/node_modules/) y
+// fallback al node_modules/ del proyecto host (legacy install, para usuarios
+// que instalaron Memory antes del refactor a isolated). Retorna `location`
+// para que el caller sepa de dónde vienen las deps.
 export async function verifyMemoryDepsInstalled() {
   const required = ['@xenova/transformers', '@qdrant/js-client-rest', 'onnxruntime-node'];
-  const missing = [];
+
+  // Intento 1: install aislado (path preferido).
+  const isolatedMissing = [];
+  for (const dep of required) {
+    const pjPath = join(cwd(), MEMORY_ENGINE_DIR, 'node_modules', dep, 'package.json');
+    if (!await fileExists(pjPath)) isolatedMissing.push(dep);
+  }
+  if (isolatedMissing.length === 0) {
+    return { ok: true, missing: [], location: 'isolated' };
+  }
+
+  // Intento 2: project root (legacy). Solo lo consideramos OK si están TODOS.
+  const projectMissing = [];
   for (const dep of required) {
     const pjPath = join(cwd(), 'node_modules', dep, 'package.json');
-    if (!await fileExists(pjPath)) missing.push(dep);
+    if (!await fileExists(pjPath)) projectMissing.push(dep);
   }
-  return { ok: missing.length === 0, missing };
+  if (projectMissing.length === 0) {
+    return { ok: true, missing: [], location: 'project' };
+  }
+
+  // Ninguno completo — reportamos los faltantes de la ubicación preferida (isolated).
+  return { ok: false, missing: isolatedMissing, location: null };
 }
 
 // Ejecuta el comando de install hasta que tenga éxito o el usuario cancele.
 // Detecta errores comunes (ERESOLVE de NPM) y ofrece flags específicas
 // (--legacy-peer-deps, --force) en el menú de reintento.
-export async function installMemoryDepsWithRetry(pm, depList, initialFlags = []) {
+//
+// Install AISLADO: corre con cwd=vault/memory/.engine/ que tiene su propia
+// package.json + .npmrc. El proyecto host no se entera. Por eso ya NO recibimos
+// `depList` — las deps están en el package.json aislado, npm las resuelve solo.
+export async function installMemoryDepsWithRetry(pm, _depListUnused = null, initialFlags = []) {
   let currentPm = pm;
   let extraFlags = [...initialFlags];
-
-  const installCmdFor = (m) => m === 'yarn' ? 'add'
-                              : m === 'pnpm' ? 'add'
-                              : m === 'bun' ? 'add'
-                              : 'install';
+  // Toda la ejecución es relativa a este cwd. El proyecto host queda intacto.
+  const installCwd = join(cwd(), MEMORY_ENGINE_DIR);
 
   for (let attempt = 1; attempt <= 5; attempt++) {
     if (attempt > 1) {
@@ -108,12 +142,14 @@ export async function installMemoryDepsWithRetry(pm, depList, initialFlags = [])
       console.log(dim(`  Reintento ${attempt - 1}/4 con ${currentPm}${flagsStr}...`));
     }
 
-    const installCmd = installCmdFor(currentPm);
-    const args = [installCmd, ...depList, ...extraFlags];
-    const label = `Instalar deps (${currentPm}${extraFlags.length ? ' ' + extraFlags.join(' ') : ''})`;
+    // En instalación aislada usamos `install` sin lista de deps — npm/pnpm/yarn/bun
+    // leen las deps de package.json local. Esto evita parsearlas, y deja que
+    // cada PM use su flujo nativo de resolución.
+    const args = ['install', ...extraFlags];
+    const label = `Instalar deps Memory aislado (${currentPm}${extraFlags.length ? ' ' + extraFlags.join(' ') : ''})`;
 
     rl.pause();
-    const exitCode = await runChild(currentPm, args, label);
+    const exitCode = await runChild(currentPm, args, label, { cwd: installCwd });
 
     const verify = await verifyMemoryDepsInstalled();
 
