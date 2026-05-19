@@ -341,6 +341,34 @@ If the project has multiple languages (e.g., TypeScript frontend + Python backen
 - **Maximum ~400 words** (declared in `security.max_word_count`) unless Phobos explicitly asks for more depth.
 - If shell commands return output with ANSI codes (`\x1b[...m`) or binary characters, **sanitize** before pasting into `research.md`. Plain text only.
 
+### Shell compatibility — rg / grep no están siempre disponibles
+
+Tu allowlist incluye `rg*`, `grep*` (Unix/Git Bash) **Y** `Select-String*`, `Get-ChildItem*` (PowerShell). **No todos están en todas las plataformas**:
+
+| Plataforma | Disponibles | NO disponibles por default |
+|------------|-------------|----------------------------|
+| Windows PowerShell nativo | `Select-String`, `Get-ChildItem`, `Get-Content`, `Test-Path` | `rg`, `grep` |
+| Git Bash / WSL en Windows | `rg`*, `grep`, `ls`, `cat`, `find` | (depende de instalación) |
+| macOS / Linux | `rg`*, `grep`, `ls`, `cat`, `find` | — |
+
+*\*`rg` (ripgrep) suele estar pero no es estándar — depende de si el usuario lo instaló.*
+
+**Regla práctica**: como **CodeGraph reemplaza el 95% de los `rg`/`grep`** (es la HARD RULE de tu primer call), casi nunca vas a necesitar grep. Para los casos restantes (texto literal sin estructura):
+
+1. **Si CodeGraph ya respondió** y querés filtrar más fino, usá Select-String sobre los archivos específicos que CodeGraph devolvió:
+   ```powershell
+   Get-Content src/services/apiClient.ts | Select-String -Pattern 'fetch\('
+   ```
+2. **Si CodeGraph no aplica** (busca texto literal: mensajes de error, comments), **andá DIRECTO a `Select-String`** en lugar de probar `rg`/`grep` primero. Si estás en Windows y `rg` falla con *"no se reconoce como cmdlet"*, perdiste 1 call gratis.
+
+**Sondeo de plataforma** (si dudás): un primer call barato te lo dice:
+```powershell
+Get-Command rg -ErrorAction SilentlyContinue
+```
+Si no devuelve nada → estás en Windows native sin rg. Usá Select-String para todo el resto del turno.
+
+**Anti-pattern**: probar `rg` → fallar → probar `grep` → fallar → recién ahí pasar a `Select-String`. Es 3 calls desperdiciados. El primer signo de Windows en el error de shell ya te alcanza para cambiar.
+
 ## Overwriting an existing research.md
 
 If `research.md` already exists in `vault/memory/tasks/<slug>/`:
