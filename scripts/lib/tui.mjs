@@ -4,6 +4,26 @@ import { cyan, dim, green, visibleLen } from './colors.mjs';
 import { rl } from './runtime.mjs';
 import { WIZARD_CANCELLED, HINT_SELECT, HINT_MULTI } from './exit.mjs';
 
+// ANSI escapes para ocultar/mostrar el cursor del terminal.
+// Sin esto, en Windows Terminal (y otros) el cursor queda visible debajo del
+// menú parpadeando — el rerender de tuiSelect deja el cursor en la línea
+// siguiente al hint, y ese parpadeo se ve como flicker al navegar con flechas.
+const CURSOR_HIDE = '\x1b[?25l';
+const CURSOR_SHOW = '\x1b[?25h';
+
+// Garantizamos que el cursor vuelva a aparecer si el proceso muere mientras un
+// picker está activo (Ctrl+C, crash, exit forzado). Si no, el usuario queda
+// con el cursor invisible en la terminal.
+let _cursorRestoreRegistered = false;
+function ensureCursorRestoreOnExit() {
+  if (_cursorRestoreRegistered) return;
+  _cursorRestoreRegistered = true;
+  const restore = () => { try { stdout.write(CURSOR_SHOW); } catch {} };
+  process.on('exit', restore);
+  process.on('SIGINT', () => { restore(); process.exit(130); });
+  process.on('SIGTERM', () => { restore(); process.exit(143); });
+}
+
 export function tuiSelect(prompt, options, defaultIdx = 0) {
   return new Promise((resolve, reject) => {
     let selected = defaultIdx;
@@ -40,6 +60,8 @@ export function tuiSelect(prompt, options, defaultIdx = 0) {
     rl.pause();
     stdin.setRawMode(true);
     stdin.resume();
+    ensureCursorRestoreOnExit();
+    stdout.write(CURSOR_HIDE);
 
     const onKey = (str, key) => {
       if (!key) return;
@@ -72,6 +94,7 @@ export function tuiSelect(prompt, options, defaultIdx = 0) {
     };
 
     function cleanup() {
+      stdout.write(CURSOR_SHOW);
       stdin.setRawMode(false);
       stdin.removeListener('keypress', onKey);
       rl.resume();
@@ -130,6 +153,8 @@ export function tuiMultiSelect(prompt, options, defaultChecked = []) {
     rl.pause();
     stdin.setRawMode(true);
     stdin.resume();
+    ensureCursorRestoreOnExit();
+    stdout.write(CURSOR_HIDE);
 
     const onKey = (str, key) => {
       if (!key) return;
@@ -160,6 +185,7 @@ export function tuiMultiSelect(prompt, options, defaultChecked = []) {
     };
 
     function cleanup() {
+      stdout.write(CURSOR_SHOW);
       stdin.setRawMode(false);
       stdin.removeListener('keypress', onKey);
       rl.resume();
