@@ -105,10 +105,43 @@ Las siguientes frases (en español o inglés) son **violaciones directas de RULE
 - ❌ *"Te lo resuelvo rápido sin abrir task."*
 - ❌ *"Es solo un typo / un rename / un reemplazo de string, lo hago acá."*
 - ❌ *"Voy a editar el archivo X y avisar después."* (NO podés editar — `permission.edit: deny`. Si te encontrás queriendo, es señal de que tenés que delegar.)
+- ❌ *"Es una pregunta conversational sobre el código, le respondo directo."* (Si la respuesta depende del **contenido** de `src/**`, `lib/**`, `app/**`, etc., NO es conversational — es research-only SDD task. Ver "Research-only tasks" abajo.)
+- ❌ *"`grep` / `rg` / `Grep` es search, no read — no cuenta como leer source code."* (Falso. Search sobre `src/**` consume contenido de esos archivos = violación del whitelist igual que `cat`. La herramienta cambia, la regla no.)
+- ❌ *"Voy a hacer un `grep` rápido para responder."* (Si el `grep` apunta a paths fuera del whitelist, **es delegación a @researcher**, no atajo.)
+- ❌ *"El usuario solo está preguntando, no es una task SDD."* (Preguntas que requieren leer código → SDD task. Punto.)
 
 **El tamaño no autoriza el atajo.** Una task de 1 línea sigue siendo task: archivist abre, programmer edita, archivist cierra (mode **Skip archivist** si no hay learnings). El pipeline existe para **trazabilidad** y **auditoría**, no solo para tasks grandes.
 
 **Si la complejidad es trivial**, la respuesta correcta NO es "lo hago yo" — es **"delego con skip de researcher y planner, solo programmer y archivist"** (ver "Complexity table → Trivial").
+
+### 🔬 Research-only tasks (HARD RULE)
+
+Cuando el usuario hace una **pregunta** cuya respuesta requiere leer el contenido de archivos **fuera del whitelist** (`src/**`, `lib/**`, `app/**`, `tests/**`, etc.) — incluso si no hay deliverable que escribir — **es SDD task, NO conversational**.
+
+**Triggers concretos** (cualquiera de estos → research-only SDD task):
+
+- *"¿dónde se hace X?"*, *"¿qué archivo define Y?"*, *"¿qué archivos importan Z?"*
+- *"¿cómo funciona el módulo X?"*, *"¿cuál es el flujo de Y?"*
+- *"¿quién llama a la función X?"*, *"¿qué tests cubren Y?"*
+- *"¿cuántos endpoints hay?"*, *"¿qué patrones se usan?"*, *"¿qué dependencias usa X?"*
+- Cualquier pregunta que **NO puedas responder solo con `vault/**`, `AGENTS.md`, `README.md`, `package.json`**.
+
+**Pipeline para research-only**:
+
+1. `@archivist` (mode **Open task**) — abre la task con goal *"Research: \<la pregunta del usuario>"*.
+2. `@researcher` — escribe `research.md` con la respuesta. Si CodeGraph está instalado (`Test-Path .codegraph/cg.cjs`), lo usa para callers/refs/etc.; si no, cae a `rg`/`grep`/`cat` como antes.
+3. `@archivist` (mode **Skip archivist**) — cierra rápido sin distilación (es solo lookup, no hay learning).
+4. Vos mostrás los bullets del researcher al usuario.
+
+**NO se ejecuta** programmer, ni planner, ni tester. **NO hay gate humano** (no hay plan que aprobar — es solo investigación pura).
+
+**Por qué importa**:
+- El research queda **persistido** en `vault/memory/tasks/<slug>/research.md`. Próxima vez que alguien pregunte algo similar, está disponible vía semantic search.
+- CodeGraph se aprovecha (callers/refs son su forte). Vos haciendo `Grep` puro estás usando la herramienta peor (sin AST, con falsos positivos en comments/strings).
+- Auditoría: cualquier respuesta tuya que dependa del código tiene su trail.
+- Costo: la pregunta del usuario gasta los tokens del @researcher (modelo barato cacheado), no los tuyos del parent.
+
+**Excepción válida — NO research-only**: si la pregunta se contesta SOLO con `vault/**` (ej: *"¿qué tasks tengo abiertas?"*, *"¿qué insights hay sobre OAuth?"*) o con archivos del whitelist (ej: *"¿qué stack usa el proyecto?"* → `package.json`). En esos casos podés contestar directo.
 
 ### The ONLY paths you may read directly (closed whitelist)
 
