@@ -319,6 +319,7 @@ export async function installCodeGraph() {
   console.log(dim('  fuente:  github.com/colbymchenry/codegraph'));
   console.log(dim('  qué hace: AST + grafo de relaciones; reduce ~94% los tool calls del researcher.'));
   console.log(dim('  ⚡ NO toca el package.json principal — CI/CD nunca lo va a bajar.'));
+  console.log(dim('  ⚡ Usa npm (no pnpm/yarn) en el install aislado para evitar quirks de workspaces.'));
   console.log('');
 
   // ─── Step 1/6: Verificar prerequisitos ─────────────────────────────
@@ -332,6 +333,28 @@ export async function installCodeGraph() {
   }
 
   const status = await detectCodeGraphStatus();
+
+  // Detección de install corrupto: existe node_modules en .codegraph/ pero
+  // no encontramos el package en la ubicación esperada. Causa típica: pnpm
+  // con workspaces guardó el paquete en .pnpm/ sin crear el symlink top-level,
+  // o un install previo se cortó a mitad. Limpiamos antes de reintentar.
+  const nodeModulesExists = await fileExists(join(CODEGRAPH_HOST_DIR, 'node_modules'));
+  const installCorrupt = nodeModulesExists && !status.pkgInstalled;
+  if (installCorrupt) {
+    console.log(yellow('  ⚠ Detecté un install previo con layout corrupto en .codegraph/node_modules/'));
+    console.log(dim('    (típico de pnpm en proyectos con workspaces, o de un install cortado a mitad)'));
+    console.log('');
+    const fixIt = await tuiYesNo('¿Limpiar .codegraph/node_modules/ y reinstalar desde cero?', true);
+    if (!fixIt) {
+      console.log(dim('  ⊘ saltado. CodeGraph va a seguir sin funcionar hasta limpiarlo.\n'));
+      return;
+    }
+    await rmrf(join(CODEGRAPH_HOST_DIR, 'node_modules'));
+    // Forzamos que el resto del flujo vea estado "sin paquete instalado".
+    status.pkgInstalled = false;
+    status.dbBuilt = false;
+    console.log(green('  ✓ Limpio. Continúo con install fresco.\n'));
+  }
 
   // ─── Step 2/6: Decidir acción según estado actual ─────────────────
   if (status.pkgInstalled && status.dbBuilt) {
@@ -373,7 +396,7 @@ export async function installCodeGraph() {
     }
   }
 
-  // ─── Step 3/6: Crear manifest aislado + instalar adentro ──────────
+  // ─── Step 3/6: Crear manifest aislado + .npmrc + instalar adentro ─
   const m = await ensureCodeGraphHostManifest();
   if (m.created) {
     console.log(green('  ✓ ') + dim('Creé manifest aislado en ') + cyan(CODEGRAPH_HOST_DIR + '/package.json'));
@@ -381,41 +404,56 @@ export async function installCodeGraph() {
     console.log(dim('  ℹ Manifest aislado ya existe — reuso.'));
   }
 
-  const pm = await detectPackageManager();
-  console.log(dim('  Package manager detectado: ') + cyan(pm) + '\n');
+  // .npmrc local: ignore-workspace + node-linker=hoisted. Crítico para pnpm
+  // en proyectos con workspaces (el host aislado NO debe heredar del workspace).
+  // Si lo creamos por primera vez ahora y ya había node_modules, ese
+  // node_modules quedó con el layout viejo — borramos para forzar re-install.
+  const npmrc = await ensureCodeGraphNpmrc();
+  if (npmrc.created) {
+    console.log(green('  ✓ ') + dim('Creé ') + cyan(CODEGRAPH_HOST_DIR + '/.npmrc') + dim(' (workspace-isolated + flat layout)'));
+    if (await fileExists(join(CODEGRAPH_HOST_DIR, 'node_modules'))) {
+      console.log(dim('    ℹ Limpio el node_modules viejo (se generó sin estas reglas).'));
+      await rmrf(join(CODEGRAPH_HOST_DIR, 'node_modules'));
+    }
+  }
 
-  // El install corre adentro de .codegraph/ — no toca el package.json principal.
-  const installArgs = pm === 'yarn' ? ['install']
-                    : pm === 'pnpm' ? ['install']
-                    : pm === 'bun'  ? ['install']
-                    : ['install'];
+  // Forzamos NPM para el install aislado independientemente del package
+  // manager del proyecto principal. Razones:
+  //   1. npm crea node_modules plano predecible (sin .pnpm/, sin PnP, etc).
+  //   2. npm viene con Node, no requiere instalación adicional.
+  //   3. El install aislado NO comparte nada con el proyecto principal,
+  //      por lo tanto el package manager principal no influye.
+  //   4. Evita los problemas de pnpm con workspaces (hoisting, symlinks
+  //      que no se crean en isolated mode, etc).
+  // El .npmrc local (ignore-workspace + hoisted) ya está como defensa extra
+  // por si alguien corre pnpm install ahí a mano después.
+  const projectPm = await detectPackageManager();
+  console.log(dim('  Project package manager: ') + cyan(projectPm) + dim('  (no afecta — uso npm para el install aislado)') + '\n');
 
   rl.pause();
   const installCode = await runChild(
-    pm, installArgs,
-    `Instalar ${CODEGRAPH_PKG} (aislado en ${CODEGRAPH_HOST_DIR}/)`,
+    'npm', ['install'],
+    `Instalar ${CODEGRAPH_PKG} (aislado con npm en ${CODEGRAPH_HOST_DIR}/)`,
     { cwd: CODEGRAPH_HOST_DIR },
   );
   if (installCode !== 0) {
     const verify = await detectCodeGraphStatus();
     if (!verify.pkgInstalled) {
-      console.log(red(`\n  ✗ Falló la instalación (exit ${installCode}).`));
-      console.log(dim('    Probá manualmente: ') + cyan(`cd ${CODEGRAPH_HOST_DIR} && ${pm} install`));
+      console.log(red(`\n  ✗ Falló la instalación con npm (exit ${installCode}).`));
+      console.log(dim('    Probá manualmente: ') + cyan(`cd ${CODEGRAPH_HOST_DIR} && npm install`));
       console.log('');
       return;
     }
-    console.log(yellow(`\n  ⚠ ${pm} retornó exit ${installCode} pero el paquete está. Continuamos.\n`));
+    console.log(yellow(`\n  ⚠ npm retornó exit ${installCode} pero el paquete está. Continuamos.\n`));
   } else {
     console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado en ${CODEGRAPH_HOST_DIR}/node_modules/\n`));
   }
 
   // ─── Step 4/6: Crear shim estable + inicializar config ──────────
-  const shimRes = await ensureCodeGraphShim();
-  if (shimRes.created) {
-    console.log(green('  ✓ ') + dim('Creé shim de invocación en ') + cyan(CODEGRAPH_SHIM));
-  } else {
-    console.log(dim('  ℹ Shim ya existía — reuso.'));
-  }
+  // Siempre regeneramos el shim (force: true) para asegurar que tenga la
+  // lógica más reciente de resolución (createRequire vs paths hardcoded).
+  const shimRes = await ensureCodeGraphShim({ force: true });
+  console.log(green('  ✓ ') + dim((shimRes.created ? 'Creé' : 'Regeneré') + ' shim de invocación en ') + cyan(CODEGRAPH_SHIM));
 
   if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
     const initCode = await runChild(
