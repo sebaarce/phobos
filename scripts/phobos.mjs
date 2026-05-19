@@ -91,13 +91,20 @@ async function getMainMenuState(agentDir, adapter) {
   // este proyecto y devolvemos info por cada uno (no solo el "activo").
   // Esto permite que el header refleje, ej., que tanto OpenCode como Claude
   // están instalados side-by-side.
+  //
+  // Contamos SOLO los 6 agentes de Phobos (phobos, researcher, planner,
+  // programmer, tester, archivist). Si lo dejamos como "todos los .md del
+  // dir", contaríamos también agentes de Claude/OpenCode que el usuario
+  // pueda tener al lado de Phobos (ej: .claude/agents/ con 6 phobos + 6 user).
+  const PHOBOS_AGENTS = ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist'];
   const all = await detectAllInstalledAdapters();
   const installedIDEs = [];
   for (const a of all) {
     let agentCount = 0;
     try {
       const files = await readdir(resolve(cwd(), a.agentDir));
-      agentCount = files.filter(f => f.endsWith('.md') && f !== 'README.md').length;
+      const present = new Set(files.filter(f => f.endsWith('.md')).map(f => f.replace(/\.md$/, '')));
+      agentCount = PHOBOS_AGENTS.filter(n => present.has(n)).length;
     } catch {}
     installedIDEs.push({ id: a.id, displayName: a.displayName, agentDir: a.agentDir, agentCount });
   }
@@ -150,9 +157,10 @@ async function runMainMenu(agentDir, adapter) {
     // "Instalar Phobos para..." — entry point del wizard. Lista todos los IDE
     // soportados, marca cuáles ya están instalados, y permite agregar soporte
     // a uno nuevo. Va primero porque es la acción "raíz" del wizard.
-    // El parenthetical muestra el estado actual ("actual: OpenCode" si solo
-    // hay uno; cuando haya multi-IDE va a listar todos).
-    const installLabel = 'Instalar Phobos para...  ' + dim(`(actual: ${adapter.displayName})`);
+    // El parenthetical refleja TODOS los IDEs instalados (multi-IDE aware).
+    const installedNames = state.installedIDEs.map(i => i.displayName).join(', ');
+    const installLabel = 'Instalar Phobos para...  '
+      + dim(`(instalado: ${installedNames || 'ninguno'})`);
 
     // "Abrir TUI" — lanza la TUI del IDE con Phobos. Si hay más de un IDE
     // instalado, el parenthetical lo refleja y `actionOpenTUI` pregunta cuál.
@@ -242,10 +250,16 @@ async function actionInstallPhobos(currentAdapter) {
     new ClaudeAdapter(),
   ];
 
+  // Multi-IDE aware: detectamos quiénes están instalados (no solo "el actual").
+  // Si chequeáramos solo currentAdapter.id, Claude se marcaría "disponible" aunque
+  // ya esté instalado side-by-side con OpenCode.
+  const installedIds = new Set(
+    (await detectAllInstalledAdapters()).map(a => a.id),
+  );
+
   const options = allAdapters.map(a => {
-    const isCurrent = a.id === currentAdapter.id;
     let suffix;
-    if (isCurrent) {
+    if (installedIds.has(a.id)) {
       suffix = dim('   (ya instalado)');
     } else if (!a.isImplemented) {
       suffix = dim('   (próximamente)');
@@ -269,8 +283,8 @@ async function actionInstallPhobos(currentAdapter) {
 
   const target = allAdapters[index];
 
-  // Caso 1: ya está instalado
-  if (target.id === currentAdapter.id) {
+  // Caso 1: ya está instalado (cualquiera de los IDEs detectados — no solo el "actual").
+  if (installedIds.has(target.id)) {
     console.log('');
     console.log('  ' + green('✓ ') + target.displayName + ' ya está instalado en este proyecto.');
     console.log('');
