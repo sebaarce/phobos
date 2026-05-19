@@ -531,8 +531,9 @@ export async function installCodeGraph() {
 //              puede consultar el filesystem para mostrar estado dinámico
 //              (ej: "instalado · re-instalar / re-indexar").
 //   action     async () => void — qué hacer cuando el usuario lo elige.
-//   exitAfter  bool (opcional) — si true, después de ejecutar el wizard
-//              cierra (caso típico: "Abrir OpenCode" reemplaza el proceso).
+//   exitAfter  bool (opcional) — si true, después de ejecutar el tool
+//              cierra el wizard (reservado por si alguna acción futura
+//              reemplaza el proceso).
 //
 // Para growth grande (>10 herramientas) considerar Opción C (plugin
 // discovery: cada tool en su propio archivo bajo scripts/lib/tools/).
@@ -567,12 +568,6 @@ const TOOLS = [
       return 'Instalar CodeGraph       ' + dim('— índice semántico del código (–94% tool calls)');
     },
     action: installCodeGraph,
-  },
-  {
-    id: 'opencode',
-    label: 'Abrir OpenCode           ' + dim('— lanzar el TUI'),
-    action: () => runChild('opencode', [], 'Abrir OpenCode'),
-    exitAfter: true,
   },
 ];
 
@@ -609,7 +604,7 @@ export async function actionInstallTools(adapter) {
     await tool.action(adapter);
 
     if (tool.exitAfter) {
-      // Caso "Abrir OpenCode" — el usuario probablemente quiera salir del wizard.
+      // Acción con exitAfter — el wizard cierra después de correrla.
       showHappyGoodbye();
       finalizeAndExit(0);
       return;

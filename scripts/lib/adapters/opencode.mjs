@@ -210,6 +210,10 @@ export class OpencodeAdapter extends IDEAdapter {
     return null;
   }
 
+  launchCommand() {
+    return { bin: 'opencode', args: [] };
+  }
+
   backupBaseDir() {
     // Mantenemos el nombre histórico (.opencode/agent_backup/phobos) para
     // que usuarios existentes encuentren sus backups donde siempre estuvieron.

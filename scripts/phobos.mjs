@@ -34,6 +34,7 @@ import { ensureBootstrap } from './lib/bootstrap.mjs';
 import { scanForUpdates, actionUpdateAgents } from './lib/update.mjs';
 import { actionSetModels, actionViewModels } from './lib/models.mjs';
 import { actionInstallTools } from './lib/tools.mjs';
+import { runChild } from './lib/child.mjs';
 import { actionMemory } from './lib/memory/index.mjs';
 import { detectQdrantStatus } from './lib/memory/engine.mjs';
 import { OpencodeAdapter } from './lib/adapters/opencode.mjs';
@@ -131,6 +132,12 @@ async function runMainMenu(agentDir, adapter) {
     // hay uno; cuando haya multi-IDE va a listar todos).
     const installLabel = 'Instalar Phobos para...  ' + dim(`(actual: ${adapter.displayName})`);
 
+    // "Abrir TUI" — lanza la TUI del IDE con Phobos. Si hay más de un IDE
+    // instalado, el parenthetical lo refleja y `actionOpenTUI` pregunta cuál.
+    const installedTUIs = await detectAllInstalledAdapters();
+    const tuiNames = installedTUIs.map(a => a.displayName).join(' o ');
+    const tuiLabel = 'Abrir TUI                ' + dim(`(${tuiNames || adapter.displayName})`);
+
     // En el menú principal Esc no tiene sentido (no hay "menú padre"),
     // pero si el usuario lo apreta, lo tratamos como "no acción" — solo re-rendereamos.
     let choice;
@@ -144,6 +151,7 @@ async function runMainMenu(agentDir, adapter) {
           'Setear modelos de agentes',
           'Instalar herramientas',
           memoryLabel,
+          tuiLabel,
           dim('Salir'),
         ],
         0,
@@ -159,14 +167,26 @@ async function runMainMenu(agentDir, adapter) {
     } else if (index === 1) {
       await runAction(() => actionUpdateAgents(adapter));
     } else if (index === 2) {
-      await runAction(() => actionViewModels(adapter));
+      const target = await pickAdapterFor('Ver configuración de modelos', adapter);
+      if (target) await runAction(() => actionViewModels(target));
     } else if (index === 3) {
-      await runAction(() => actionSetModels(adapter));
+      const target = await pickAdapterFor('Setear modelos de agentes', adapter);
+      if (target) await runAction(() => actionSetModels(target));
     } else if (index === 4) {
       await runAction(() => actionInstallTools(adapter));
     } else if (index === 5) {
       await runAction(() => actionMemory(adapter));
     } else if (index === 6) {
+      // Abrir TUI — al volver del child (TUI cerrada) salimos del wizard:
+      // el usuario ya consumió la sesión, no tiene sentido reaparecer el menú.
+      const launched = await actionOpenTUI(adapter);
+      if (launched) {
+        showHappyGoodbye();
+        finalizeAndExit(0);
+        return;
+      }
+      // launched=false → el usuario canceló el sub-prompt de "qué TUI" — volvemos al menú.
+    } else if (index === 7) {
       clearScreen();
       showHappyGoodbye();
       finalizeAndExit(0);
@@ -344,18 +364,94 @@ async function selectTarget() {
 // un IDE instalado, devolver el primero según orden de prioridad (OpenCode > Claude).
 // El menú "Instalar para otro IDE" permite agregar el segundo target.
 async function detectInstalledAdapter() {
+  const installed = await detectAllInstalledAdapters();
+  return installed[0] || null;
+}
+
+// Variante: devuelve TODOS los IDEs que tengan Phobos instalado en este
+// proyecto (no solo el primero). Útil para "Abrir TUI" cuando el usuario
+// tiene OpenCode y Claude Code conviviendo: el menú le pregunta cuál abrir.
+async function detectAllInstalledAdapters() {
   const candidates = [new OpencodeAdapter(), new ClaudeAdapter()];
+  const installed = [];
   for (const adapter of candidates) {
-    // No probamos paths de adapters no implementados (sus getters tiran).
     if (!adapter.isImplemented) continue;
     try {
       const phobosPath = join(resolve(cwd(), adapter.agentDir), 'phobos.md');
-      if (await fileExists(phobosPath)) return adapter;
+      if (await fileExists(phobosPath)) installed.push(adapter);
     } catch {
-      // adapter.agentDir tiró → adapter mal implementado, salteamos.
+      // adapter mal implementado, salteamos.
     }
   }
-  return null;
+  return installed;
+}
+
+// Pregunta al usuario qué IDE configurar/inspeccionar cuando hay más de uno
+// instalado en el proyecto. Si hay solo uno, lo devuelve directo sin prompt.
+// Usado por las acciones cuyo estado depende del IDE (modelos, ver config),
+// porque .opencode/agent/ y .claude/agents/ tienen frontmatter distinto y
+// confundirlos sería un sin-sentido para el usuario.
+//
+// Devuelve el adapter elegido, o null si el usuario canceló.
+async function pickAdapterFor(actionTitle, defaultAdapter) {
+  const installed = await detectAllInstalledAdapters();
+  if (installed.length <= 1) {
+    return installed[0] || defaultAdapter;
+  }
+  clearScreen();
+  printHeader();
+  console.log('');
+  console.log('  ' + cyan('▸ ') + bold(actionTitle));
+  console.log(dim('  Tenés Phobos instalado en más de un IDE — elegí cuál querés configurar.'));
+  console.log('');
+  const defaultIdx = Math.max(0, installed.findIndex(a => a.id === defaultAdapter.id));
+  const options = installed.map(a => a.displayName);
+  options.push(dim('← Volver'));
+  let choice;
+  try {
+    choice = await tuiSelect('\n¿Qué IDE?', options, defaultIdx);
+  } catch (err) {
+    if (err === WIZARD_CANCELLED) return null;
+    throw err;
+  }
+  if (choice.index === installed.length) return null;
+  return installed[choice.index];
+}
+
+// Abre la TUI del IDE elegido con Phobos como agente primario. Si hay más de
+// un IDE instalado, pregunta cuál. Devuelve true si se ejecutó (el caller
+// debería cerrar el wizard después — la TUI reemplaza la atención del usuario).
+async function actionOpenTUI(currentAdapter) {
+  const installed = await detectAllInstalledAdapters();
+  if (installed.length === 0) {
+    // Defensivo — el main menu solo se renderiza con un adapter activo.
+    installed.push(currentAdapter);
+  }
+
+  let target = installed[0];
+  if (installed.length > 1) {
+    clearScreen();
+    printHeader();
+    console.log('');
+    console.log('  ' + cyan('▸ ') + bold('Abrir TUI'));
+    console.log('');
+    const options = installed.map(a => a.displayName);
+    options.push(dim('← Volver'));
+    let choice;
+    try {
+      choice = await tuiSelect('\n¿Qué TUI abrir?', options, 0);
+    } catch (err) {
+      if (err === WIZARD_CANCELLED) return false;
+      throw err;
+    }
+    if (choice.index === installed.length) return false;
+    target = installed[choice.index];
+  }
+
+  const { bin, args } = target.launchCommand();
+  rl.pause();
+  await runChild(bin, args, 'Abrir ' + target.displayName);
+  return true;
 }
 
 async function main() {

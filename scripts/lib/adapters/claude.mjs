@@ -204,6 +204,13 @@ export class ClaudeAdapter extends IDEAdapter {
     return CLAUDE_AGENT_CONFIG[agentName]?.model || 'inherit';
   }
 
+  launchCommand() {
+    // `--agent phobos` arranca Claude Code con phobos como agente primario
+    // (Opción 1 — explicit primary). Los subagentes researcher/planner/etc.
+    // se invocan vía la Task tool desde phobos.
+    return { bin: 'claude', args: ['--agent', 'phobos'] };
+  }
+
   backupBaseDir() {
     return '.claude/agents_backup/phobos';
   }

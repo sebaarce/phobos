@@ -168,6 +168,19 @@ export class IDEAdapter {
     ];
   }
 
+  // ─── Lanzar la TUI del IDE con Phobos ─────────────────────────────
+
+  /**
+   * Comando para abrir la TUI del IDE en modo Phobos. El wizard usa esto
+   * en la acción "Abrir TUI" del menú principal.
+   *   OpenCode: `opencode`
+   *   Claude:   `claude --agent phobos`
+   * @returns {{bin: string, args: string[]}}
+   */
+  launchCommand() {
+    throw new Error(`${this.constructor.name} must override launchCommand()`);
+  }
+
   // ─── Manipulación del frontmatter del agente ──────────────────────
 
   /**
