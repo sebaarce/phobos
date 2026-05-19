@@ -144,9 +144,12 @@ export function diagnoseMemoryFailure(output) {
 // Detecta si el researcher.md del proyecto tiene las reglas RAG (pre-flight
 // search + Previous insights). Si no las tiene, el researcher NUNCA va a
 // consultar el engine, sin importar que Qdrant esté corriendo.
-export async function detectResearcherHasRAG() {
+// `adapter` opcional: si se pasa, usa adapter.agentDir; si no, default
+// OpenCode (.opencode/agent/) por compat con callers internos viejos.
+export async function detectResearcherHasRAG(adapter) {
+  const agentDir = adapter && adapter.agentDir ? adapter.agentDir : '.opencode/agent';
   try {
-    const content = await readFile('.opencode/agent/researcher.md', 'utf-8');
+    const content = await readFile(join(agentDir, 'researcher.md'), 'utf-8');
     return /Pre-flight:\s*semantic\s*search/i.test(content)
       || /vault\/memory\/\.engine\/search\.mjs/.test(content);
   } catch {
@@ -234,9 +237,11 @@ export async function checkTaskMemoryUsage() {
 // reindex en archivist). Si ambos las tienen, Memory va a funcionar
 // automáticamente. Si no, el engine se instala pero los agentes viejos no la
 // usan — el usuario debe correr "Actualizar agentes" primero.
-export async function detectAgentsHaveMemorySupport() {
-  const researcherPath = join(cwd(), '.opencode/agent/researcher.md');
-  const archivistPath = join(cwd(), '.opencode/agent/archivist.md');
+// `adapter` opcional: si se pasa, usa adapter.agentDir; si no, default OpenCode.
+export async function detectAgentsHaveMemorySupport(adapter) {
+  const agentDir = adapter && adapter.agentDir ? adapter.agentDir : '.opencode/agent';
+  const researcherPath = join(cwd(), agentDir, 'researcher.md');
+  const archivistPath = join(cwd(), agentDir, 'archivist.md');
 
   let researcherOK = false;
   let archivistOK = false;
@@ -256,7 +261,9 @@ export async function detectAgentsHaveMemorySupport() {
   return { researcherOK, archivistOK };
 }
 
-export async function actionInspectQdrant() {
+// `adapter` opcional — sirve a detectResearcherHasRAG() para chequear el
+// agente en el path correcto del IDE. Sin adapter, fallback a .opencode/agent/.
+export async function actionInspectQdrant(adapter) {
   clearScreen();
   printMemoryBanner();
 
@@ -367,7 +374,7 @@ export async function actionInspectQdrant() {
   console.log('');
   console.log('  ' + bold('Sanity de agentes — uso de Memory en tareas'));
   const usage = await checkTaskMemoryUsage();
-  const researcherHasRAG = await detectResearcherHasRAG();
+  const researcherHasRAG = await detectResearcherHasRAG(adapter);
   const installedAt = await getMemoryInstalledAt();
 
   const fmtDate = (d) => d ? d.toISOString().slice(0, 19).replace('T', ' ') : '?';

@@ -23,7 +23,7 @@ import { readdir } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { cwd, stdin, stdout, exit } from 'node:process';
 
-import { AGENTS_DIR, TEMPLATES_DIR, rl } from './lib/runtime.mjs';
+import { TEMPLATES_DIR, rl } from './lib/runtime.mjs';
 import { fileExists } from './lib/fs-utils.mjs';
 import { yellow, cyan, green, dim, bold } from './lib/colors.mjs';
 import { clearScreen } from './lib/tui.mjs';
@@ -76,7 +76,7 @@ function renderMainMenuHeader(agentDir, installState) {
   console.log('');
 }
 
-async function getMainMenuState(agentDir) {
+async function getMainMenuState(agentDir, adapter) {
   let agentsInstalled = false;
   let agentCount = 0;
   try {
@@ -90,7 +90,7 @@ async function getMainMenuState(agentDir) {
 
   let pendingUpdates = 0;
   try {
-    const updates = await scanForUpdates();
+    const updates = await scanForUpdates(adapter);
     pendingUpdates = updates.outdated.length + updates.missing.length;
   } catch {}
 
@@ -113,7 +113,7 @@ async function getMainMenuState(agentDir) {
 
 async function runMainMenu(agentDir, adapter) {
   while (true) {
-    const state = await getMainMenuState(agentDir);
+    const state = await getMainMenuState(agentDir, adapter);
     renderMainMenuHeader(agentDir, state);
 
     const updateLabel = state.pendingUpdates > 0
@@ -157,15 +157,15 @@ async function runMainMenu(agentDir, adapter) {
     if (index === 0) {
       await runAction(() => actionInstallPhobos(adapter));
     } else if (index === 1) {
-      await runAction(() => actionUpdateAgents());
+      await runAction(() => actionUpdateAgents(adapter));
     } else if (index === 2) {
-      await runAction(() => actionViewModels(agentDir));
+      await runAction(() => actionViewModels(adapter));
     } else if (index === 3) {
-      await runAction(() => actionSetModels(agentDir));
+      await runAction(() => actionSetModels(adapter));
     } else if (index === 4) {
-      await runAction(() => actionInstallTools());
+      await runAction(() => actionInstallTools(adapter));
     } else if (index === 5) {
-      await runAction(() => actionMemory());
+      await runAction(() => actionMemory(adapter));
     } else if (index === 6) {
       clearScreen();
       showHappyGoodbye();
@@ -374,9 +374,9 @@ async function main() {
       return;
     }
 
-    // Bootstrap para el target elegido (Fase 1: módulos siguen usando globals
-    // viejos, así que ensureBootstrap funciona como antes para OpenCode).
-    const bootstrapped = await ensureBootstrap();
+    // Bootstrap para el target elegido — ensureBootstrap recibe el adapter
+    // y usa adapter.bootstrapFiles() para saber qué copiar.
+    const bootstrapped = await ensureBootstrap(adapter);
     if (!bootstrapped) {
       showSadGoodbye();
       finalizeAndExit(0);

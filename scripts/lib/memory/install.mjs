@@ -33,7 +33,10 @@ import {
 } from './collection.mjs';
 import { detectAgentsHaveMemorySupport } from './inspect.mjs';
 
-export async function actionInstallMemory() {
+// `adapter` opcional — se usa para chequear si los agentes locales tienen
+// soporte de Memory (ver detectAgentsHaveMemorySupport). Sin adapter, hace
+// fallback a `.opencode/agent/`.
+export async function actionInstallMemory(adapter) {
   const history = [];
 
   // ─── Step 1/6: Verificar prerequisitos ──────────────────────────────
@@ -82,7 +85,7 @@ export async function actionInstallMemory() {
   }
   const collectionName = resolved.slug;
 
-  const agentSupport = await detectAgentsHaveMemorySupport();
+  const agentSupport = await detectAgentsHaveMemorySupport(adapter);
   const agentsReady = agentSupport.researcherOK && agentSupport.archivistOK;
   const problemStacks = await detectProblematicStack();
   const npmrcHasFlag = await checkNpmrcHasLegacyPeerDeps();

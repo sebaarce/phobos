@@ -1,8 +1,10 @@
 // Bootstrap — chequeo y creación del scaffold (agentes, comandos, vault).
+// Recibe un IDEAdapter como parámetro; la lista de archivos a copiar viene
+// de adapter.bootstrapFiles() — agnóstico al target IDE.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cwd, stdout } from 'node:process';
-import { BOOTSTRAP_GROUPS, TEMPLATES_DIR, srcToDst } from './runtime.mjs';
+import { TEMPLATES_DIR } from './runtime.mjs';
 import { fileExists, safeWriteFile } from './fs-utils.mjs';
 import { green, dim, bold } from './colors.mjs';
 import { tuiYesNo } from './tui.mjs';
@@ -20,51 +22,79 @@ export function drawProgress(label, current, total, width = 24) {
   if (current === total) stdout.write('\n');
 }
 
-export async function findMissing() {
-  const missing = { agentes: [], comandos: [], vault: [], gitignore: false };
-  for (const [group, files] of Object.entries(BOOTSTRAP_GROUPS)) {
-    for (const src of files) {
-      const dst = srcToDst(src);
-      if (!await fileExists(join(cwd(), dst))) missing[group].push(src);
+// ═══════════════════════════════════════════════════════════════════
+// Discovery
+// ═══════════════════════════════════════════════════════════════════
+
+// Devuelve los archivos del bootstrap que faltan en el cwd.
+// Estructura: { byGroup: { agentes: [...], comandos: [...], vault: [...] },
+//               flat: [...], gitignore: bool }
+// `byGroup` agrupa por el campo `group` del adapter para mostrar progress
+// segmentado. `flat` es la lista plana para conteos.
+export async function findMissing(adapter) {
+  const files = adapter.bootstrapFiles();
+  const byGroup = {};
+  const flat = [];
+  for (const file of files) {
+    if (!await fileExists(join(cwd(), file.dst))) {
+      const group = file.group || 'other';
+      if (!byGroup[group]) byGroup[group] = [];
+      byGroup[group].push(file);
+      flat.push(file);
     }
   }
   // .gitignore — opcional, no se sobreescribe si existe
-  if (!await fileExists(join(cwd(), '.gitignore'))) {
-    missing.gitignore = await fileExists(join(TEMPLATES_DIR, '.gitignore'));
-  }
-  return missing;
+  const gitignoreMissing = !await fileExists(join(cwd(), '.gitignore'))
+    && await fileExists(join(TEMPLATES_DIR, '.gitignore'));
+  return { byGroup, flat, gitignore: gitignoreMissing };
 }
 
 export function summarizeMissing(missing) {
-  const counts = {
-    agentes: missing.agentes.length,
-    comandos: missing.comandos.length,
-    vault: missing.vault.length,
-    gitignore: missing.gitignore ? 1 : 0,
-  };
-  const total = counts.agentes + counts.comandos + counts.vault + counts.gitignore;
+  const counts = {};
+  for (const [group, files] of Object.entries(missing.byGroup)) {
+    counts[group] = files.length;
+  }
+  counts.gitignore = missing.gitignore ? 1 : 0;
+  const total = missing.flat.length + counts.gitignore;
   return { counts, total };
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Bootstrap execution
+// ═══════════════════════════════════════════════════════════════════
+
+// Labels para el progress bar por grupo. Si un grupo no está acá, se usa
+// el nombre del grupo capitalizado. Esto permite que el adapter introduzca
+// grupos nuevos sin que bootstrap.mjs los conozca.
+const GROUP_LABELS = {
+  agentes:  'Creando agentes      ',
+  comandos: 'Creando comandos     ',
+  vault:    'Creando estructura de memory',
+};
 
 export async function bootstrap(missing) {
   console.log(bold('\n  Bootstrap iniciado.\n'));
 
-  const groupLabels = {
-    agentes:  'Creando agentes      ',
-    comandos: 'Creando comandos     ',
-    vault:    'Creando estructura de memory',
-  };
+  // Render groups in a stable order: known groups first (agentes, comandos,
+  // vault), then any additional groups alphabetically.
+  const knownOrder = ['agentes', 'comandos', 'vault'];
+  const allGroups = Object.keys(missing.byGroup);
+  const orderedGroups = [
+    ...knownOrder.filter(g => allGroups.includes(g)),
+    ...allGroups.filter(g => !knownOrder.includes(g)).sort(),
+  ];
 
-  for (const group of ['agentes', 'comandos', 'vault']) {
-    const files = missing[group];
-    if (files.length === 0) continue;
+  for (const group of orderedGroups) {
+    const files = missing.byGroup[group];
+    if (!files || files.length === 0) continue;
+    const label = GROUP_LABELS[group] || ('Creando ' + group);
     for (let i = 0; i < files.length; i++) {
-      const src = join(TEMPLATES_DIR, files[i]);
-      const dstRel = srcToDst(files[i]);
+      const file = files[i];
+      const src = join(TEMPLATES_DIR, file.src);
       const content = await readFile(src, 'utf-8');
       // safeWriteFile valida symlinks + path-traversal y crea el dirname.
-      await safeWriteFile(dstRel, content);
-      drawProgress(groupLabels[group], i + 1, files.length);
+      await safeWriteFile(file.dst, content);
+      drawProgress(label, i + 1, files.length);
     }
   }
 
@@ -78,13 +108,19 @@ export async function bootstrap(missing) {
   console.log(green('\n  ✓ Bootstrap completo.\n'));
 }
 
-export async function ensureBootstrap() {
-  const missing = await findMissing();
+export async function ensureBootstrap(adapter) {
+  if (!adapter) {
+    throw new Error('ensureBootstrap requires an adapter (IDEAdapter instance).');
+  }
+  const missing = await findMissing(adapter);
   const { total } = summarizeMissing(missing);
 
   if (total === 0) return true;
 
-  const confirm = await tuiYesNo('\n¿Querés instalar los agentes en este proyecto?', true);
+  const confirm = await tuiYesNo(
+    `\n¿Querés instalar Phobos para ${adapter.displayName} en este proyecto?`,
+    true,
+  );
   if (!confirm) {
     return false;
   }

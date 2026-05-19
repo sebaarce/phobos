@@ -10,30 +10,23 @@ import { panel, tuiSelect, tuiYesNo } from './tui.mjs';
 import { printUpdateBanner, renderWizardStep } from './banners.mjs';
 import { pressEnterToContinue } from './exit.mjs';
 
-export const TRACKED_AGENT_FILES = [
-  // Agents
-  { src: 'opencode/agent/phobos.md',     dst: '.opencode/agent/phobos.md',     ignoreModel: true  },
-  { src: 'opencode/agent/researcher.md', dst: '.opencode/agent/researcher.md', ignoreModel: true  },
-  { src: 'opencode/agent/planner.md',    dst: '.opencode/agent/planner.md',    ignoreModel: true  },
-  { src: 'opencode/agent/programmer.md', dst: '.opencode/agent/programmer.md', ignoreModel: true  },
-  { src: 'opencode/agent/tester.md',     dst: '.opencode/agent/tester.md',     ignoreModel: true  },
-  { src: 'opencode/agent/archivist.md',  dst: '.opencode/agent/archivist.md',  ignoreModel: true  },
-  // Slash commands
-  { src: 'opencode/command/adapt-agents.md',   dst: '.opencode/command/adapt-agents.md',   ignoreModel: false },
-  { src: 'opencode/command/models-wizard.md',  dst: '.opencode/command/models-wizard.md',  ignoreModel: false },
-  { src: 'opencode/command/reindex-memory.md',    dst: '.opencode/command/reindex-memory.md',    ignoreModel: false },
-  { src: 'opencode/command/reindex-codegraph.md', dst: '.opencode/command/reindex-codegraph.md', ignoreModel: false },
-  { src: 'opencode/command/list-memory.md',       dst: '.opencode/command/list-memory.md',       ignoreModel: false },
-];
+// Nota: la lista de archivos trackeados ya NO vive acá. Cada IDEAdapter
+// declara sus propios archivos vía adapter.trackedFiles(). Esto permite
+// que el mismo flow de "Actualizar agentes" sirva para OpenCode, Claude Code,
+// o cualquier IDE futuro — solo cambia el adapter que se le pasa.
 
 export function normalizeIgnoringModel(content) {
   return content.replace(/^model:\s*.+$/m, 'model: <PRESERVED>');
 }
 
-export async function scanForUpdates() {
+export async function scanForUpdates(adapter) {
+  if (!adapter) {
+    throw new Error('scanForUpdates requires an adapter (IDEAdapter instance).');
+  }
   const result = { outdated: [], missing: [], inSync: [] };
+  const tracked = adapter.trackedFiles();
 
-  for (const f of TRACKED_AGENT_FILES) {
+  for (const f of tracked) {
     const templatePath = join(TEMPLATES_DIR, f.src);
     const localPath = join(cwd(), f.dst);
 
@@ -346,12 +339,15 @@ export async function ensureUpdated() {
   }
 }
 
-export async function actionUpdateAgents() {
+export async function actionUpdateAgents(adapter) {
+  if (!adapter) {
+    throw new Error('actionUpdateAgents requires an adapter (IDEAdapter instance).');
+  }
   const history = [];
 
   // ─── Step 1/4: Detectar archivos diferentes y faltantes ────────────
   renderWizardStep(printUpdateBanner, history, '[1/4] Detectando estado de templates...');
-  const updates = await scanForUpdates();
+  const updates = await scanForUpdates(adapter);
   const totalOutdated = updates.outdated.length;
   const totalMissing = updates.missing.length;
   const totalInSync = updates.inSync.length;

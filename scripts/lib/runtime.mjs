@@ -25,55 +25,20 @@ export const PKG_VERSION = (() => {
   }
 })();
 
-export const AGENTS_DIR = '.opencode/agent';
+// Lista de agentes — IDE-agnostic. Estos 6 agentes existen en cualquier
+// target del Phobos (OpenCode, Claude Code, etc.) con los mismos roles;
+// solo cambia el formato del frontmatter, que lo maneja el adapter.
 export const AGENTS = ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist'];
 
 // Habilitar keypress events para TUI
 readlineSync.emitKeypressEvents(stdin);
 
 // ═══════════════════════════════════════════════════════════════════
-// Bootstrap — archivos que deben existir en el proyecto
+// Nota: BOOTSTRAP_GROUPS, AGENTS_DIR y srcToDst() vivían acá hasta Fase 2.
+// Ahora la verdad de qué archivos copia el bootstrap, y a qué paths del
+// proyecto destino, vive en cada IDEAdapter (scripts/lib/adapters/*.mjs)
+// vía adapter.bootstrapFiles() y adapter.agentDir.
 // ═══════════════════════════════════════════════════════════════════
-
-export const BOOTSTRAP_GROUPS = {
-  agentes: [
-    'opencode/agent/phobos.md',
-    'opencode/agent/researcher.md',
-    'opencode/agent/planner.md',
-    'opencode/agent/programmer.md',
-    'opencode/agent/tester.md',
-    'opencode/agent/archivist.md',
-  ],
-  comandos: [
-    'opencode/command/adapt-agents.md',
-    'opencode/command/models-wizard.md',
-    'opencode/command/reindex-memory.md',
-    'opencode/command/reindex-codegraph.md',
-    'opencode/command/list-memory.md',
-  ],
-  vault: [
-    'vault/SCHEMA.md',
-    'vault/TASKS.md',
-    'vault/README.md',
-    'vault/sources/.gitkeep',
-    'vault/memory/tasks/.gitkeep',
-    'vault/memory/insights/.gitkeep',
-    'vault/memory/wiki/.gitkeep',
-    'vault/memory/glossary/.gitkeep',
-    // research-queries/ — preguntas casuales del usuario (research-only sin task formal).
-    // Direct researcher escribe acá; no van a TASKS.md ## Current.
-    // Pueden "promoverse" a task formal vía archivist mode "Promote query to task".
-    'vault/memory/research-queries/.gitkeep',
-  ],
-};
-
-// Mapeo src (relativo a TEMPLATES_DIR) → dst (relativo a cwd)
-export function srcToDst(srcPath) {
-  // 'opencode/agent/phobos.md' → '.opencode/agent/phobos.md'
-  // 'vault/SCHEMA.md' → 'vault/SCHEMA.md'
-  if (srcPath.startsWith('opencode/')) return '.' + srcPath;
-  return srcPath;
-}
 
 // Rol de cada agente (solo descriptivo para UI — los weights están en PROFILE_WEIGHTS).
 export const AGENT_PROFILES = {

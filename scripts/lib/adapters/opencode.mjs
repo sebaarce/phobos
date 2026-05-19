@@ -52,7 +52,9 @@ export class OpencodeAdapter extends IDEAdapter {
   // ─── Archivos para bootstrap ───────────────────────────────────────
 
   bootstrapFiles() {
-    // Cada item: { src (relativo a TEMPLATES_DIR), dst (relativo a cwd) }
+    // Cada item: { src (relativo a TEMPLATES_DIR), dst (relativo a cwd), group }
+    // El `group` es solo cosmético para el progress bar — agrupa archivos
+    // relacionados ("Creando agentes" vs "Creando comandos" vs "Creando vault").
     const files = [];
 
     // Agentes
@@ -60,6 +62,7 @@ export class OpencodeAdapter extends IDEAdapter {
       files.push({
         src: `opencode/agent/${agent}.md`,
         dst: `.opencode/agent/${agent}.md`,
+        group: 'agentes',
       });
     }
 
@@ -68,6 +71,7 @@ export class OpencodeAdapter extends IDEAdapter {
       files.push({
         src: `opencode/command/${cmd}.md`,
         dst: `.opencode/command/${cmd}.md`,
+        group: 'comandos',
       });
     }
 
@@ -84,7 +88,7 @@ export class OpencodeAdapter extends IDEAdapter {
       'vault/memory/research-queries/.gitkeep',
     ];
     for (const v of vaultFiles) {
-      files.push({ src: v, dst: v });
+      files.push({ src: v, dst: v, group: 'vault' });
     }
 
     return files;

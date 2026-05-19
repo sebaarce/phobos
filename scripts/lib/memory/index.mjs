@@ -47,10 +47,16 @@ async function deleteQdrantCollection(name) {
 // - Si Memory NO está instalada → corre el wizard de instalación.
 // - Si Memory SÍ está instalada → muestra un submenú con: Re-indexar,
 //   Reset Qdrant, Re-instalar engine, Volver.
-export async function actionMemory() {
+// `adapter` opcional: las acciones de Memory son mayormente IDE-agnostic
+// (Qdrant, vault/, scripts del engine). Solo lo necesitan los checkers que
+// leen agentes (`detectResearcherHasRAG`, `detectAgentsHaveMemorySupport`) y
+// los install/update paths que tocan `.opencode/agent/` (o `.claude/agents/`).
+// Lo pasamos para que esos dependientes lo reciban; sin adapter, fallbackean
+// a `.opencode/agent/` por compatibilidad.
+export async function actionMemory(adapter) {
   const installed = await fileExists('vault/memory/.engine/config.json');
   if (!installed) {
-    return actionInstallMemory();
+    return actionInstallMemory(adapter);
   }
 
   while (true) {
@@ -91,7 +97,7 @@ export async function actionMemory() {
 
     if (choice.index === 5) return;
     if (choice.index === 0) {
-      await runAction(() => actionInspectQdrant());
+      await runAction(() => actionInspectQdrant(adapter));
     } else if (choice.index === 1) {
       await runAction(() => actionMemoryReindexForce());
     } else if (choice.index === 2) {
@@ -99,7 +105,7 @@ export async function actionMemory() {
     } else if (choice.index === 3) {
       await runAction(() => actionResetQdrant());
     } else if (choice.index === 4) {
-      await runAction(() => actionInstallMemory());
+      await runAction(() => actionInstallMemory(adapter));
     }
   }
 }

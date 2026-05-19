@@ -75,14 +75,20 @@ export async function installObsidianSkills() {
   console.log(dim('    echo ".agents/skills/" >> .gitignore\n'));
 }
 
-export async function installImpeccable() {
+export async function installImpeccable(adapter) {
   // Impeccable — skill de diseño (pbakaus/impeccable).
-  // Layout del repo: .opencode/skills/impeccable/{SKILL.md, reference/, scripts/}
-  // No es publicable vía `npx skills add` (el repo tiene un solo skill en path no-estándar).
-  // Estrategia: git clone shallow + copy del subdirectorio, sin requerir git config global.
+  // El repo upstream sigue un layout OpenCode-style (.opencode/skills/impeccable/...).
+  // Lo copiamos al primer skill dir del adapter (typically `.opencode/skills/` para
+  // OpenCode, `.claude/skills/` para Claude Code, etc.).
+
+  // Path destino: primer entry del skillDirs del adapter (local first).
+  const skillDir = adapter && adapter.skillDirs && adapter.skillDirs[0]
+    ? adapter.skillDirs[0]
+    : '.opencode/skills';
+  const dest = join(skillDir, 'impeccable');
 
   console.log('\n' + cyan('▸ ') + bold('Instalar Impeccable (skill de diseño per-proyecto)'));
-  console.log(dim('  destino: .opencode/skills/impeccable/  (en este proyecto)'));
+  console.log(dim('  destino: ' + dest + '/  (en este proyecto)'));
   console.log(dim('  fuente:  github.com/pbakaus/impeccable'));
   console.log(dim('  qué hace: vocabulario + 27 anti-patterns + workflows de auditoría de UI.'));
   console.log('');
@@ -90,7 +96,7 @@ export async function installImpeccable() {
   const { index } = await tuiSelect(
     '¿Instalar impeccable en este proyecto?',
     [
-      `Sí, instalar  ${dim('(git clone + copy a .opencode/skills/impeccable/)')}`,
+      `Sí, instalar  ${dim('(git clone + copy a ' + dest + '/)')}`,
       'Cancelar',
     ],
     0,
@@ -101,7 +107,6 @@ export async function installImpeccable() {
     return;
   }
 
-  const dest = '.opencode/skills/impeccable';
   if (await fileExists(dest)) {
     const { index: overwriteIdx } = await tuiSelect(
       `Ya existe ${dest}. ¿Sobrescribir?`,
@@ -114,8 +119,8 @@ export async function installImpeccable() {
     }
   }
 
-  // Asegurar que .opencode/skills/ exista
-  await mkdir('.opencode/skills', { recursive: true }).catch(() => {});
+  // Asegurar que el skill dir exista
+  await mkdir(skillDir, { recursive: true }).catch(() => {});
 
   // Step 1: git clone shallow a tmp
   const tmpDir = '.tmp-impeccable-' + Date.now();
@@ -129,7 +134,10 @@ export async function installImpeccable() {
     return;
   }
 
-  // Step 2: copiar .opencode/skills/impeccable/ del tmp al destino
+  // Step 2: copiar .opencode/skills/impeccable/ del tmp al destino del adapter
+  // El layout del UPSTREAM (pbakaus/impeccable) es `.opencode/skills/impeccable/`,
+  // pero el destino lo decide el adapter actual. Para Claude Code va a
+  // `.claude/skills/impeccable/`, etc.
   const src = join(tmpDir, '.opencode', 'skills', 'impeccable');
   if (!await fileExists(src)) {
     console.log(yellow(`  ⚠ El repo clonado no tiene ${src}. Quizás el upstream cambió.\n`));
@@ -145,7 +153,7 @@ export async function installImpeccable() {
     ? { cmd: 'xcopy', args: [src.replace(/\//g, '\\'), dest.replace(/\//g, '\\'), '/E', '/I', '/Y', '/Q'] }
     : { cmd: 'cp', args: ['-r', src, dest] };
 
-  const copyCode = await runChild(copyCmd.cmd, copyCmd.args, 'Copiar .opencode/skills/impeccable/');
+  const copyCode = await runChild(copyCmd.cmd, copyCmd.args, `Copiar ${dest}/`);
   await rmrf(tmpDir);
 
   if (copyCode !== 0) {
@@ -154,11 +162,10 @@ export async function installImpeccable() {
   }
 
   console.log(green('\n  ✓ Impeccable instalado en ') + cyan(dest));
-  console.log(dim('\n  OpenCode auto-descubrirá la skill al reiniciar.'));
-  console.log(dim('  Verificá con:  ') + cyan('opencode debug skill'));
+  console.log(dim('\n  El IDE auto-descubrirá la skill al reiniciar.'));
   console.log(dim('  Tip CLI extra (sin instalar):  ') + cyan('npx impeccable detect src/'));
   console.log(dim('  Tip: si no querés commitear la skill, agregá a .gitignore:'));
-  console.log(dim('    echo ".opencode/skills/impeccable/" >> .gitignore\n'));
+  console.log(dim('    echo "' + dest + '/" >> .gitignore\n'));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -543,7 +550,9 @@ const TOOLS = [
   {
     id: 'impeccable',
     label: 'Instalar impeccable      ' + dim('— skill de diseño/UI (vocab + anti-patterns)'),
-    action: installImpeccable,
+    // Wrapper: cuando actionInstallTools llama tool.action(), le pasamos el adapter
+    // del contexto. Esto se setea al entrar a actionInstallTools(adapter).
+    action: (adapter) => installImpeccable(adapter),
   },
   {
     id: 'codegraph',
@@ -567,7 +576,8 @@ const TOOLS = [
   },
 ];
 
-export async function actionInstallTools() {
+export async function actionInstallTools(adapter) {
+  if (!adapter) throw new Error('actionInstallTools requires an adapter (IDEAdapter instance).');
   while (true) {
     clearScreen();
     printToolsBanner();
@@ -594,7 +604,9 @@ export async function actionInstallTools() {
 
     const tool = TOOLS[index];
     rl.pause();
-    await tool.action();
+    // Algunas tools necesitan el adapter (ej: impeccable usa adapter.skillDirs).
+    // Otras son IDE-agnostic — el adapter pasa de largo sin afectar.
+    await tool.action(adapter);
 
     if (tool.exitAfter) {
       // Caso "Abrir OpenCode" — el usuario probablemente quiera salir del wizard.

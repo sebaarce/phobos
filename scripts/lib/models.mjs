@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { resolve as resolvePath } from 'node:path';
 import { stdin, stdout, exit, platform, env, cwd } from 'node:process';
 import { AGENTS, AGENT_PROFILES, rl } from './runtime.mjs';
 import { fileExists, tryExec, assertSafeShellArg, safeWriteFile } from './fs-utils.mjs';
@@ -224,6 +225,9 @@ export async function detect() {
 // Lectura/escritura de agentes
 // ═══════════════════════════════════════════════════════════════════
 
+// Lee el modelo configurado de cada agente. Acepta el agentDir directo
+// (path absoluto al directorio de agentes del proyecto) — quien llama suele
+// pasar `resolve(cwd(), adapter.agentDir)`.
 export async function readCurrentModels(agentDir) {
   const result = {};
   for (const agent of AGENTS) {
@@ -903,7 +907,14 @@ export async function applyChanges(agentDir, current, target) {
   return { changed, backup };
 }
 
-export async function actionSetModels(agentDir) {
+// Recibe el adapter del IDE activo. Deriva el agentDir internamente del
+// adapter — el resto del flow es target-agnostic (lee modelos, escribe a
+// los .md, hace backup). La detección de providers/modelos (`detect()`)
+// sigue siendo OpenCode-specific por ahora; cuando se sume Claude Code se
+// va a parametrizar via `adapter.detectModels()`.
+export async function actionSetModels(adapter) {
+  if (!adapter) throw new Error('actionSetModels requires an adapter (IDEAdapter instance).');
+  const agentDir = resolvePath(cwd(), adapter.agentDir);
   const history = [];
 
   // ─── Step 1/4: Detectar providers ──────────────────────────────────
@@ -1003,7 +1014,11 @@ export async function actionSetModels(agentDir) {
 // Acción read-only del menú principal: imprime el estado actual de cada
 // agente sin modificar nada. Útil para diagnosticar configuraciones antes
 // de tocarlas, ver qué provider domina, o auditar después de un cambio.
-export async function actionViewModels(agentDir) {
+// Recibe el adapter del IDE activo y muestra el estado actual de los
+// modelos asignados a cada agente. Read-only: nunca modifica archivos.
+export async function actionViewModels(adapter) {
+  if (!adapter) throw new Error('actionViewModels requires an adapter (IDEAdapter instance).');
+  const agentDir = resolvePath(cwd(), adapter.agentDir);
   clearScreen();
   printModelsBanner();
   console.log('');
