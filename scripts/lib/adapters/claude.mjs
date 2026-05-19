@@ -119,6 +119,16 @@ export class ClaudeAdapter extends IDEAdapter {
       });
     }
 
+    // Permission allowlist por defecto. Evita que el usuario tenga que
+    // aprobar manualmente cada Bash/Read/Edit/Write de las herramientas de
+    // Phobos (Memory engine, CodeGraph, grep/find del researcher, etc.).
+    // El denylist explícito de secretos gana sobre cualquier allow.
+    files.push({
+      src: 'claude/settings.json',
+      dst: '.claude/settings.json',
+      group: 'comandos',
+    });
+
     // Vault — IDE-agnostic, idéntico para los dos targets.
     const vaultFiles = [
       'vault/SCHEMA.md',
@@ -156,6 +166,11 @@ export class ClaudeAdapter extends IDEAdapter {
       { src: 'claude/commands/reindex-memory.md',    dst: '.claude/commands/reindex-memory.md',    ignoreModel: false },
       { src: 'claude/commands/reindex-codegraph.md', dst: '.claude/commands/reindex-codegraph.md', ignoreModel: false },
       { src: 'claude/commands/list-memory.md',       dst: '.claude/commands/list-memory.md',       ignoreModel: false },
+      // Permission allowlist — el usuario puede customizar, así que la
+      // tratamos como "missing → restore" pero no overwriteamos si ya existe
+      // con cambios locales. El wizard de updates va a marcarla como diff
+      // si el usuario tiene una versión más vieja del template.
+      { src: 'claude/settings.json',                 dst: '.claude/settings.json',                 ignoreModel: false },
     ];
   }
 
