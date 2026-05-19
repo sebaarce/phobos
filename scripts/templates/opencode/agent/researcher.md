@@ -25,19 +25,19 @@ permission:
     "date*": allow
     "Get-Date*": allow
     # CodeGraph — install aislado en .codegraph/ (NO en node_modules raíz).
-    # CI/CD no lo baja porque NO está en el package.json principal. El binario
-    # vive en .codegraph/node_modules/.bin/codegraph (wrapper script, NO un
-    # módulo JS — por eso NO se invoca con `node` prefix; el shell resuelve
-    # `.cmd` en Windows y sh-bang en Unix). Solo read-only (query/affected/etc.);
+    # CI/CD no lo baja porque NO está en el package.json principal. El wizard
+    # genera un shim estable en .codegraph/cg.cjs que carga el binario real
+    # vía require() — esto bypassea las diferencias entre pnpm/npm/yarn (pnpm
+    # con node-linker isolated a veces no crea .bin/codegraph). Solo read-only;
     # init/index los corre el usuario vía wizard.
-    ".codegraph/node_modules/.bin/codegraph query*": allow
-    ".codegraph/node_modules/.bin/codegraph affected*": allow
-    ".codegraph/node_modules/.bin/codegraph search*": allow
-    ".codegraph/node_modules/.bin/codegraph callers*": allow
-    ".codegraph/node_modules/.bin/codegraph callees*": allow
-    ".codegraph/node_modules/.bin/codegraph refs*": allow
-    ".codegraph/node_modules/.bin/codegraph definition*": allow
-    ".codegraph/node_modules/.bin/codegraph status*": allow
+    "node .codegraph/cg.cjs query*": allow
+    "node .codegraph/cg.cjs affected*": allow
+    "node .codegraph/cg.cjs search*": allow
+    "node .codegraph/cg.cjs callers*": allow
+    "node .codegraph/cg.cjs callees*": allow
+    "node .codegraph/cg.cjs refs*": allow
+    "node .codegraph/cg.cjs definition*": allow
+    "node .codegraph/cg.cjs status*": allow
 security:
   slug_regex: "^[a-zA-Z0-9_-]{3,60}$"
   forbidden_paths:
@@ -96,19 +96,18 @@ The `research.md` file itself is written in **English** (so future skills and to
 
 **Before** any `rg`/`grep`/`cat` pass over the source code, **check whether the project has CodeGraph installed**. CodeGraph is an optional local AST + relation graph that the user installs via the wizard (`phobos` → Instalar herramientas → CodeGraph). When available, it answers structural questions (callers, callees, references, definitions, affected tests) in **a single tool call** instead of dozens of `rg` invocations.
 
-**Install model — isolated**: CodeGraph se instala en `.codegraph/` con su propio `node_modules/`, **fuera del `package.json` principal del proyecto**. Esto significa que CI/CD nunca lo baja, y que el binario se invoca con path explícito: `.codegraph/node_modules/.bin/codegraph <subcommand>`. No uses `npx codegraph` ni `pnpm exec codegraph` — esos comandos buscan en `node_modules/` del proyecto y no encontrarían nada.
+**Install model — isolated**: CodeGraph se instala en `.codegraph/` con su propio `node_modules/`, **fuera del `package.json` principal del proyecto**. Esto significa que CI/CD nunca lo baja. El wizard de Phobos genera un **shim estable** en `.codegraph/cg.cjs` que vos invocás con `node .codegraph/cg.cjs <subcommand>`. El shim carga el JS real internamente, así que funciona idéntico en npm, pnpm, yarn y bun. No uses `npx codegraph` ni `pnpm exec codegraph`.
 
-**Lazy detection** (cheap, no SKILL.md read — just check artifacts on disk):
+**Lazy detection** (cheap, no SKILL.md read — just check the shim + db on disk):
 
 ```bash
 # bash / unix
-ls .codegraph/node_modules/@colbymchenry/codegraph/package.json 2>/dev/null \
-  && ls .codegraph/codegraph.db 2>/dev/null
+ls .codegraph/cg.cjs 2>/dev/null && ls .codegraph/codegraph.db 2>/dev/null
 ```
 
 ```powershell
 # Windows / PowerShell
-Test-Path .codegraph\node_modules\@colbymchenry\codegraph\package.json
+Test-Path .codegraph\cg.cjs
 Test-Path .codegraph\codegraph.db
 ```
 
@@ -116,22 +115,22 @@ Test-Path .codegraph\codegraph.db
 
 | Pregunta | Comando CodeGraph | Alternativa (sin CodeGraph) |
 |----------|-------------------|------------------------------|
-| ¿Quién llama a función X? | `.codegraph/node_modules/.bin/codegraph callers --symbol X` | `rg "X\(" -t ts` (impreciso) |
-| ¿Qué funciones llama X? | `.codegraph/node_modules/.bin/codegraph callees --symbol X` | leer X y trazar a mano |
-| ¿Dónde se define el símbolo X? | `.codegraph/node_modules/.bin/codegraph definition --symbol X` | `rg "(function|class|const) X"` |
-| ¿Qué tests se afectan si toco archivo Y? | `.codegraph/node_modules/.bin/codegraph affected <Y>` | `rg <Y>` + lectura manual |
-| Búsqueda semántica sobre el código | `.codegraph/node_modules/.bin/codegraph search "..."` | `rg "..."` |
-| Estado del índice | `.codegraph/node_modules/.bin/codegraph status` | n/a |
+| ¿Quién llama a función X? | `node .codegraph/cg.cjs callers --symbol X` | `rg "X\(" -t ts` (impreciso) |
+| ¿Qué funciones llama X? | `node .codegraph/cg.cjs callees --symbol X` | leer X y trazar a mano |
+| ¿Dónde se define el símbolo X? | `node .codegraph/cg.cjs definition --symbol X` | `rg "(function|class|const) X"` |
+| ¿Qué tests se afectan si toco archivo Y? | `node .codegraph/cg.cjs affected <Y>` | `rg <Y>` + lectura manual |
+| Búsqueda semántica sobre el código | `node .codegraph/cg.cjs search "..."` | `rg "..."` |
+| Estado del índice | `node .codegraph/cg.cjs status` | n/a |
 
 **Reglas de uso**:
 
 1. **Preferí CodeGraph para preguntas estructurales** — son las que `rg` resuelve mal (`rg "X("` te trae usos en strings, comentarios, etc., y necesita filtros). CodeGraph parsea AST y desambigua.
 2. **Para texto literal** (mensajes de error, strings concretos), seguí usando `rg` — es lo correcto.
-3. **Si CodeGraph devuelve resultados poco confiables o vacíos donde sabés que hay datos**, podría estar desactualizado. Corré `.codegraph/node_modules/.bin/codegraph status` para chequear; el sync automático suele encargarse pero un repo recién clonado / re-indexado puede tardar.
+3. **Si CodeGraph devuelve resultados poco confiables o vacíos donde sabés que hay datos**, podría estar desactualizado. Corré `node .codegraph/cg.cjs status` para chequear; el sync automático suele encargarse pero un repo recién clonado / re-indexado puede tardar.
 4. **No corras `codegraph init` ni `codegraph index`** — esos son comandos del usuario (los gatilla el wizard). Tu allowlist solo te habilita los read-only.
 5. **NO leas el `SKILL.md` de CodeGraph** salvo que necesites un comando exótico — la tabla de arriba cubre el 95% de los casos y mantiene tu contexto chico.
 
-**Si CodeGraph NO está instalado** (ausencia de `.codegraph/codegraph.db` o de `.codegraph/node_modules/@colbymchenry/codegraph`), **salteá esta sección entera y procedé con `rg`/`grep`/`cat` como antes**. No es bloqueante; es una optimización opt-in. Tampoco anotes nada en `## Open questions` — su ausencia es esperada.
+**Si CodeGraph NO está instalado** (ausencia de `.codegraph/cg.cjs` o de `.codegraph/codegraph.db`), **salteá esta sección entera y procedé con `rg`/`grep`/`cat` como antes**. No es bloqueante; es una optimización opt-in. Tampoco anotes nada en `## Open questions` — su ausencia es esperada.
 
 ## Pre-flight: semantic search over the vault (memory engine)
 

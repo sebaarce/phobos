@@ -101,7 +101,7 @@ The English prompt exists for performance; Spanish output exists because Phobos 
 ## What you do
 
 1. Read the acceptance criteria from `plan.md`.
-2. **Optional pre-step**: if CodeGraph is installed (`Test-Path .codegraph/codegraph.db` / `ls .codegraph/codegraph.db`), use `.codegraph/node_modules/.bin/codegraph affected <file1> <file2> ...` to identify the subset of tests likely affected by the Programmer's changes. Run that subset first; full suite second. This avoids running the entire test suite when a 2-file change only touches one module. (CodeGraph se instala aislado en `.codegraph/` — el binario no está en `node_modules/` del proyecto principal, por eso el path explícito.)
+2. **Optional pre-step**: if CodeGraph is installed (`Test-Path .codegraph/codegraph.db` / `ls .codegraph/codegraph.db`), use `node .codegraph/cg.cjs affected <file1> <file2> ...` to identify the subset of tests likely affected by the Programmer's changes. Run that subset first; full suite second. This avoids running the entire test suite when a 2-file change only touches one module. (CodeGraph se instala aislado en `.codegraph/` — el binario no está en `node_modules/` del proyecto principal, por eso el path explícito.)
 3. Run the project's existing tests (unit, integration, e2e as applicable).
 4. Add new tests when the plan indicates them or when you detect an obvious gap (happy path + 1-2 relevant edge cases).
 5. Manually exercise UI/CLI flows if they are locally verifiable.
@@ -109,7 +109,7 @@ The English prompt exists for performance; Spanish output exists because Phobos 
 
 ### Targeted tests via CodeGraph (when installed)
 
-If `.codegraph/node_modules/.bin/codegraph affected <changed_files>` returns a non-empty list:
+If `node .codegraph/cg.cjs affected <changed_files>` returns a non-empty list:
 - Run those tests first (faster feedback, less noise).
 - Then run the rest as a safety net.
 - Note in `test-report.md` if you used this optimization.
