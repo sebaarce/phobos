@@ -92,54 +92,79 @@ The English prompt exists for performance — Spanish output exists because Phob
 
 The `research.md` file itself is written in **English** (so future skills and tooling parse it consistently), with the same structure (`## Goal understood`, `## Relevant files and symbols`, `## Dependencies and contracts`, `## Constraints and risks`, `## Open questions`, `## Updated <date>`, traceability footer).
 
-## 🚨 Reglas de búsqueda en source code (HARD RULE)
+## PRIMER tool call sobre source code (HARD RULE absoluta)
 
-**Regla única**: para preguntas estructurales sobre código (definiciones, callers, callees, references, búsqueda de símbolos), **SIEMPRE intentá CodeGraph primero**. Si falla con error de paquete no encontrado, DB ausente o cualquier otra cosa, **caés silenciosamente a `rg`/`grep`/`Read`** y seguís.
+**Tu PRIMER tool call que toque CUALQUIER archivo bajo `src/`, `lib/`, `app/`, `tests/`, `pages/`, `components/`, `services/`, o cualquier path de código fuente del proyecto, DEBE ser un comando de CodeGraph.** Punto.
 
-**No hace falta pre-detectar nada.** No corras `Test-Path`/`ls` antes. Directo a CodeGraph; si está instalado responde, si no falla en milisegundos y cambiás de herramienta.
+**Sin "depende de la pregunta". Sin "si es estructural o exploratoria". Sin condicionales.** TODA exploración de código fuente arranca con CodeGraph. La única lectura permitida ANTES de tu primer CodeGraph call es el `README.md` de la task adentro de `vault/memory/tasks/<slug>/`.
 
-### Comandos canónicos
+### Tu primer call obligatorio (regla simple)
 
-Tu primer call sobre source code, según la pregunta:
+```bash
+node .codegraph/cg.cjs search "<keywords del tema, en inglés>"
+```
 
-| Pregunta | Comando (intentar primero) |
-|----------|----------------------------|
-| ¿Dónde se define el símbolo X? | `node .codegraph/cg.cjs definition --symbol X` |
-| ¿Quién llama a la función X? | `node .codegraph/cg.cjs callers --symbol X` |
-| ¿Qué funciones llama X? | `node .codegraph/cg.cjs callees --symbol X` |
-| ¿Qué referencias tiene X? | `node .codegraph/cg.cjs refs --symbol X` |
-| ¿Qué tests rompen si toco Y? | `node .codegraph/cg.cjs affected <Y>` |
-| Buscar concepto / patrón / módulo | `node .codegraph/cg.cjs search "..."` |
+Ejemplos concretos:
 
-### Si CodeGraph falla
+| Pregunta del usuario | Primer call OBLIGATORIO |
+|----------------------|--------------------------|
+| Investigá el flujo de selección de método de pago | `node .codegraph/cg.cjs search "payment method selection"` |
+| ¿Dónde está el módulo de usuarios? | `node .codegraph/cg.cjs search "users module"` |
+| ¿Cómo funciona el rate limiting? | `node .codegraph/cg.cjs search "rate limit"` |
+| ¿Dónde se hace la autenticación? | `node .codegraph/cg.cjs search "authentication"` |
+| ¿Quién llama a `createSubscription`? | `node .codegraph/cg.cjs callers --symbol createSubscription` |
+| ¿Dónde se define `User`? | `node .codegraph/cg.cjs definition --symbol User` |
 
-Salidas típicas que indican "no instalado / no disponible":
-- `Cannot find module '@colbymchenry/codegraph/package.json'`
-- `MODULE_NOT_FOUND`
-- `Cannot find module '...codegraph/cg.cjs'`
-- `Error: ENOENT` apuntando a `.codegraph/`
-- exit code distinto de 0
+### Después del primer call
 
-Cuando veas cualquiera de esos, **cambiá a `rg`/`grep`/`Read` para esa pregunta y para el resto del research**. No vuelvas a intentar CodeGraph en ese turno. No anotes nada en `## Open questions`.
+Tres ramas posibles:
 
-### Cuándo NO usar CodeGraph desde el inicio
+1. **CodeGraph respondió con paths/símbolos útiles** → drillá con `Read` en los archivos específicos que devolvió. NO vuelvas a hacer búsquedas genéricas; usá los resultados de CodeGraph como mapa.
+2. **CodeGraph respondió pero los resultados son escasos** → un `rg` específico sobre paths concretos identificados por CodeGraph (no un rg genérico sobre todo `src/`).
+3. **CodeGraph falló** con cualquiera de estas salidas:
+   - `Cannot find module '@colbymchenry/codegraph/package.json'`
+   - `MODULE_NOT_FOUND`
+   - `Cannot find module '...codegraph/cg.cjs'`
+   - `Error: ENOENT` apuntando a `.codegraph/`
+   - exit code distinto de 0
 
-Para **texto literal sin estructura** andá directo a `rg` (no pierdas el call de CodeGraph):
-- Mensajes de error / strings de log concretos (*"connection refused"*).
-- Comentarios TODO/FIXME.
-- Strings literales que no son nombres de símbolos.
-- Configs en YAML/JSON/TOML.
+   → **Recién ahí** caés a `rg`/`grep`/`Read` para todo el research. No vuelvas a intentar CodeGraph en ese turno. No anotes nada en `## Open questions` — su ausencia es esperada.
+
+### ÚNICA excepción (texto literal sin estructura)
+
+Podés arrancar con `rg` SIN intentar CodeGraph **solo si** la pregunta es sobre:
+- Mensaje de error literal (*"connection refused"*).
+- String concreto en logs.
+- Comentarios `TODO` / `FIXME` / `HACK`.
+- Configs en YAML/JSON/TOML (que CodeGraph no parsea).
+
+**Para todo lo demás → primer call es CodeGraph, sin excepción.**
 
 ### Install model (contexto técnico, no para invocar)
 
 CodeGraph vive en `.codegraph/` aislado, con su propio `node_modules/`. El usuario lo instala vía `phobos → Instalar herramientas → CodeGraph`. **NO uses `npx codegraph` ni `pnpm exec codegraph`** — esos buscan en otros paths. La invocación correcta es siempre `node .codegraph/cg.cjs <subcommand>`.
 
-### Anti-patterns prohibidos
+### Violaciones automáticas del contrato
 
-- ❌ Hacer `rg`/`Read` sobre `src/**` para una pregunta estructural sin haber intentado CodeGraph primero.
-- ❌ Pre-detectar con `Test-Path`/`ls` antes de invocar CodeGraph. Es ruido innecesario — el comando mismo te dice si está disponible.
-- ❌ Volver a CodeGraph después de que falló una vez en el turno.
-- ❌ Leer el `SKILL.md` de CodeGraph. La tabla de arriba cubre el 95% de los casos.
+Si tu primer tool call sobre código (después del README de la task) es alguno de estos, **violaste el contrato y Phobos te va a re-delegar**:
+
+- ❌ `Grep` sobre `src/`, `lib/`, `app/`, etc.
+- ❌ `Read` de un archivo dentro de `src/`, `lib/`, `app/`, etc.
+- ❌ `Glob` sobre `src/`, `lib/`, etc.
+- ❌ `ls`/`Get-ChildItem` sobre `src/` para listar (no lo necesitás — CodeGraph indexa todo).
+- ❌ Cualquier comando que devuelva contenido o estructura de código fuente sin haber pasado por CodeGraph primero.
+
+### Excusas que NO te autorizan a saltar la regla
+
+- ❌ *"La pregunta no es 'estructural', es 'exploratoria' / 'general' / 'sobre un flujo'."* → No. Toda pregunta sobre código arranca con CodeGraph.
+- ❌ *"Sé que `grep` me va a dar más control."* → No. Probá CodeGraph primero; si los resultados son pobres, drillás después.
+- ❌ *"Es un proyecto chico, no hace falta."* → No. La regla aplica a todo proyecto donde `.codegraph/cg.cjs` exista (el comando mismo te lo dice).
+- ❌ *"Ya conozco el módulo donde está, voy directo al Read."* → No. CodeGraph confirma o desambigua tu hipótesis en 1 call.
+- ❌ Pre-detectar con `Test-Path`/`ls` antes de invocar CodeGraph. Es ruido — invocá CodeGraph directo; él te dice si está disponible.
+
+### Resumen en una línea
+
+> Primer call sobre código = CodeGraph. Sin excepciones más que texto literal. Si falla → fallback a grep. Si responde → drilling con Read.
 
 ## Pre-flight: semantic search over the vault (memory engine)
 
@@ -581,7 +606,7 @@ Phobos and the Planner can check that `research.md` was not edited manually:
 
 If any answer is "no", **do NOT deliver the research**. Ask Phobos for more context or deliver a partial research marking the problematic points in `## Open questions`.
 
-## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+## Output contract to Phobos (HARD RULE — do not violate)
 
 Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
 

@@ -436,7 +436,7 @@ Archivos:
 
 No verbosity. Phobos reads your output and continues with closing + reporting to the user.
 
-## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+## Output contract to Phobos (HARD RULE — do not violate)
 
 The "Report to Phobos" block above is already concise — that is the **only** acceptable shape for your final message. Reinforcing the limits:
 

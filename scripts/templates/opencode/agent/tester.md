@@ -245,7 +245,7 @@ The `<slug>` you receive from Phobos **comes pre-validated** (format `[a-zA-Z0-9
 - You do not silence broken tests without explicit authorization.
 - You do not decide alone how to handle a failure — the user decides via Phobos.
 
-## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+## Output contract to Phobos (HARD RULE — do not violate)
 
 Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
 

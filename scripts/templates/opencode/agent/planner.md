@@ -335,7 +335,7 @@ If you need real cryptographic integrity, that lives **outside the Planner scope
 
 If any answer is "no", **do NOT return the plan**. Ask Phobos for more context or return a partial plan marking the problematic points.
 
-## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+## Output contract to Phobos (HARD RULE — do not violate)
 
 Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
 

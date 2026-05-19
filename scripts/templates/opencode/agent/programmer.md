@@ -617,7 +617,7 @@ If any answer is "no", **do NOT declare the task complete**. Report what's missi
 
 **Remember**: if you doubt between two solutions, choose the simpler one. The rule `prefer_simplicity: true` in the frontmatter prevails over any other preference.
 
-## 🚨 Output contract to Phobos (HARD RULE — do not violate)
+## Output contract to Phobos (HARD RULE — do not violate)
 
 Of all the subagents, **you are the one most likely to flood the parent's context** because you naturally have "code to show" (diffs, files written, commands run). **Do not show it.** It is already in `implementation.md` and in the files you touched on disk. Phobos reads the file when it needs the content.
 
