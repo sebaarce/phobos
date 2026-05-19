@@ -92,45 +92,54 @@ The English prompt exists for performance — Spanish output exists because Phob
 
 The `research.md` file itself is written in **English** (so future skills and tooling parse it consistently), with the same structure (`## Goal understood`, `## Relevant files and symbols`, `## Dependencies and contracts`, `## Constraints and risks`, `## Open questions`, `## Updated <date>`, traceability footer).
 
-## Pre-flight: structural query over the source code (CodeGraph — optional)
+## 🚨 Reglas de búsqueda en source code (HARD RULE)
 
-**Before** any `rg`/`grep`/`cat` pass over the source code, **check whether the project has CodeGraph installed**. CodeGraph is an optional local AST + relation graph that the user installs via the wizard (`phobos` → Instalar herramientas → CodeGraph). When available, it answers structural questions (callers, callees, references, definitions, affected tests) in **a single tool call** instead of dozens of `rg` invocations.
+**Regla única**: para preguntas estructurales sobre código (definiciones, callers, callees, references, búsqueda de símbolos), **SIEMPRE intentá CodeGraph primero**. Si falla con error de paquete no encontrado, DB ausente o cualquier otra cosa, **caés silenciosamente a `rg`/`grep`/`Read`** y seguís.
 
-**Install model — isolated**: CodeGraph se instala en `.codegraph/` con su propio `node_modules/`, **fuera del `package.json` principal del proyecto**. Esto significa que CI/CD nunca lo baja. El wizard de Phobos genera un **shim estable** en `.codegraph/cg.cjs` que vos invocás con `node .codegraph/cg.cjs <subcommand>`. El shim carga el JS real internamente, así que funciona idéntico en npm, pnpm, yarn y bun. No uses `npx codegraph` ni `pnpm exec codegraph`.
+**No hace falta pre-detectar nada.** No corras `Test-Path`/`ls` antes. Directo a CodeGraph; si está instalado responde, si no falla en milisegundos y cambiás de herramienta.
 
-**Lazy detection** (cheap, no SKILL.md read — just check the shim + db on disk):
+### Comandos canónicos
 
-```bash
-# bash / unix
-ls .codegraph/cg.cjs 2>/dev/null && ls .codegraph/codegraph.db 2>/dev/null
-```
+Tu primer call sobre source code, según la pregunta:
 
-```powershell
-# Windows / PowerShell
-Test-Path .codegraph\cg.cjs
-Test-Path .codegraph\codegraph.db
-```
+| Pregunta | Comando (intentar primero) |
+|----------|----------------------------|
+| ¿Dónde se define el símbolo X? | `node .codegraph/cg.cjs definition --symbol X` |
+| ¿Quién llama a la función X? | `node .codegraph/cg.cjs callers --symbol X` |
+| ¿Qué funciones llama X? | `node .codegraph/cg.cjs callees --symbol X` |
+| ¿Qué referencias tiene X? | `node .codegraph/cg.cjs refs --symbol X` |
+| ¿Qué tests rompen si toco Y? | `node .codegraph/cg.cjs affected <Y>` |
+| Buscar concepto / patrón / módulo | `node .codegraph/cg.cjs search "..."` |
 
-**If BOTH artifacts exist** → CodeGraph is installed and indexed. Use it for the following question types **before** falling back to `rg`/`grep`:
+### Si CodeGraph falla
 
-| Pregunta | Comando CodeGraph | Alternativa (sin CodeGraph) |
-|----------|-------------------|------------------------------|
-| ¿Quién llama a función X? | `node .codegraph/cg.cjs callers --symbol X` | `rg "X\(" -t ts` (impreciso) |
-| ¿Qué funciones llama X? | `node .codegraph/cg.cjs callees --symbol X` | leer X y trazar a mano |
-| ¿Dónde se define el símbolo X? | `node .codegraph/cg.cjs definition --symbol X` | `rg "(function|class|const) X"` |
-| ¿Qué tests se afectan si toco archivo Y? | `node .codegraph/cg.cjs affected <Y>` | `rg <Y>` + lectura manual |
-| Búsqueda semántica sobre el código | `node .codegraph/cg.cjs search "..."` | `rg "..."` |
-| Estado del índice | `node .codegraph/cg.cjs status` | n/a |
+Salidas típicas que indican "no instalado / no disponible":
+- `Cannot find module '@colbymchenry/codegraph/package.json'`
+- `MODULE_NOT_FOUND`
+- `Cannot find module '...codegraph/cg.cjs'`
+- `Error: ENOENT` apuntando a `.codegraph/`
+- exit code distinto de 0
 
-**Reglas de uso**:
+Cuando veas cualquiera de esos, **cambiá a `rg`/`grep`/`Read` para esa pregunta y para el resto del research**. No vuelvas a intentar CodeGraph en ese turno. No anotes nada en `## Open questions`.
 
-1. **Preferí CodeGraph para preguntas estructurales** — son las que `rg` resuelve mal (`rg "X("` te trae usos en strings, comentarios, etc., y necesita filtros). CodeGraph parsea AST y desambigua.
-2. **Para texto literal** (mensajes de error, strings concretos), seguí usando `rg` — es lo correcto.
-3. **Si CodeGraph devuelve resultados poco confiables o vacíos donde sabés que hay datos**, podría estar desactualizado. Corré `node .codegraph/cg.cjs status` para chequear; el sync automático suele encargarse pero un repo recién clonado / re-indexado puede tardar.
-4. **No corras `codegraph init` ni `codegraph index`** — esos son comandos del usuario (los gatilla el wizard). Tu allowlist solo te habilita los read-only.
-5. **NO leas el `SKILL.md` de CodeGraph** salvo que necesites un comando exótico — la tabla de arriba cubre el 95% de los casos y mantiene tu contexto chico.
+### Cuándo NO usar CodeGraph desde el inicio
 
-**Si CodeGraph NO está instalado** (ausencia de `.codegraph/cg.cjs` o de `.codegraph/codegraph.db`), **salteá esta sección entera y procedé con `rg`/`grep`/`cat` como antes**. No es bloqueante; es una optimización opt-in. Tampoco anotes nada en `## Open questions` — su ausencia es esperada.
+Para **texto literal sin estructura** andá directo a `rg` (no pierdas el call de CodeGraph):
+- Mensajes de error / strings de log concretos (*"connection refused"*).
+- Comentarios TODO/FIXME.
+- Strings literales que no son nombres de símbolos.
+- Configs en YAML/JSON/TOML.
+
+### Install model (contexto técnico, no para invocar)
+
+CodeGraph vive en `.codegraph/` aislado, con su propio `node_modules/`. El usuario lo instala vía `phobos → Instalar herramientas → CodeGraph`. **NO uses `npx codegraph` ni `pnpm exec codegraph`** — esos buscan en otros paths. La invocación correcta es siempre `node .codegraph/cg.cjs <subcommand>`.
+
+### Anti-patterns prohibidos
+
+- ❌ Hacer `rg`/`Read` sobre `src/**` para una pregunta estructural sin haber intentado CodeGraph primero.
+- ❌ Pre-detectar con `Test-Path`/`ls` antes de invocar CodeGraph. Es ruido innecesario — el comando mismo te dice si está disponible.
+- ❌ Volver a CodeGraph después de que falló una vez en el turno.
+- ❌ Leer el `SKILL.md` de CodeGraph. La tabla de arriba cubre el 95% de los casos.
 
 ## Pre-flight: semantic search over the vault (memory engine)
 
