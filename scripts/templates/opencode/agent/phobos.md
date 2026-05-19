@@ -142,11 +142,17 @@ Si el archivo existe:
 node vault/memory/.engine/search.mjs "<la pregunta del usuario tal cual>" --top 3 --json
 ```
 
-Decisión binaria:
-- **Score ≥ 0.75** en algún match → respondé directo al usuario con ese research previo. Mencioná la fuente:
-  > *"Ya tenemos research previo sobre esto en `vault/memory/research-queries/<slug>.md` (similarity 0.82). Te resumo: …"*
-  **STOP acá**. No delegues. Cero invocaciones a subagentes.
-- **Score < 0.75** o memory engine no instalado → seguí a Step 2.
+Decisión binaria — **AMBAS condiciones deben cumplirse para cache hit válido**:
+
+1. **Score ≥ 0.75** en al menos un match.
+2. **El contenido del match es topicamente relevante** a la pregunta del usuario. Leé el `filePath`, `sectionTitle`, y el snippet `text` del match. Si la pregunta es *"¿dónde está el módulo de pagos?"* y el match top tiene score 0.82 pero el filePath / contenido es sobre *"totalizers del dashboard"*, **NO es cache hit válido** — es un falso positivo del similarity score (palabras compartidas pero tema distinto).
+
+**Si AMBAS condiciones se cumplen** → respondé directo al usuario con ese research previo. Mencioná la fuente:
+> *"Ya tenemos research previo sobre esto en `vault/memory/research-queries/<slug>.md` (similarity 0.82). Te resumo: …"*
+
+**STOP acá**. No delegues. Cero invocaciones a subagentes.
+
+**Si NO se cumplen las dos** (score bajo O contenido no relevante O memory engine no instalado) → seguí a Step 2.
 
 **Step 2 — Direct researcher (sin archivist)**
 
