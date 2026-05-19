@@ -49,9 +49,18 @@ function renderMainMenuHeader(agentDir, installState) {
   printHeader();
 
   const projectName = basename(cwd()) || cwd();
-  const agentsStatus = installState.agentsInstalled
-    ? green(`✓ instalados (${installState.agentCount})`)
-    : yellow('⚠ faltantes');
+
+  // IDEs instalados: una línea por cada uno con su agentDir + count.
+  // Si solo hay uno, queda igual de compacto que antes. Si hay dos,
+  // el usuario ve ambos reflejados (OpenCode y Claude Code).
+  const ideLines = installState.installedIDEs.length === 0
+    ? [dim('  IDEs:    ') + yellow('⚠ ninguno instalado')]
+    : installState.installedIDEs.map(ide => {
+        const count = green(`${ide.agentCount}`);
+        return '  ' + dim('IDE:     ') + cyan(ide.displayName)
+          + dim('  ·  ') + dim(ide.agentDir + '/') + dim(' → ') + count + dim(' agentes');
+      });
+
   const vaultStatus = installState.vaultPresent
     ? green('✓ presente')
     : dim('— no creado');
@@ -70,22 +79,28 @@ function renderMainMenuHeader(agentDir, installState) {
   }
 
   console.log('  ' + dim('Proyecto:') + ' ' + cyan(projectName));
-  console.log('  ' + dim('Agentes: ') + agentsStatus
-    + dim('  ·  vault: ') + vaultStatus
-    + dim('  ·  templates: ') + updatesStatus);
+  for (const line of ideLines) console.log(line);
+  console.log('  ' + dim('Vault:   ') + vaultStatus
+    + dim('  ·  templates (' + installState.activeIDE + '): ') + updatesStatus);
   console.log('  ' + dim('Memory:  ') + memoryStatus);
   console.log('');
 }
 
 async function getMainMenuState(agentDir, adapter) {
-  let agentsInstalled = false;
-  let agentCount = 0;
-  try {
-    const files = await readdir(agentDir);
-    const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'README.md');
-    agentCount = mdFiles.length;
-    agentsInstalled = agentCount >= 1;
-  } catch {}
+  // Multi-IDE: detectamos TODOS los adapters que tienen Phobos instalado en
+  // este proyecto y devolvemos info por cada uno (no solo el "activo").
+  // Esto permite que el header refleje, ej., que tanto OpenCode como Claude
+  // están instalados side-by-side.
+  const all = await detectAllInstalledAdapters();
+  const installedIDEs = [];
+  for (const a of all) {
+    let agentCount = 0;
+    try {
+      const files = await readdir(resolve(cwd(), a.agentDir));
+      agentCount = files.filter(f => f.endsWith('.md') && f !== 'README.md').length;
+    } catch {}
+    installedIDEs.push({ id: a.id, displayName: a.displayName, agentDir: a.agentDir, agentCount });
+  }
 
   const vaultPresent = await fileExists('vault');
 
@@ -109,7 +124,14 @@ async function getMainMenuState(agentDir, adapter) {
     }
   }
 
-  return { agentsInstalled, agentCount, vaultPresent, pendingUpdates, memoryInstalled, qdrantRunning };
+  return {
+    installedIDEs,
+    activeIDE: adapter.displayName,
+    vaultPresent,
+    pendingUpdates,
+    memoryInstalled,
+    qdrantRunning,
+  };
 }
 
 async function runMainMenu(agentDir, adapter) {

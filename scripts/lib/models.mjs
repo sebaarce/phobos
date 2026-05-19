@@ -712,12 +712,18 @@ export async function chooseMode(history, allModels, current, adapter = null) {
     AGENTS.map(a => [a, recommendForAgent(a, allModels, adapter)])
   );
 
+  // Label del modo Custom: si solo hay 1 provider (típico de Claude Code),
+  // el sufijo "multi-provider" confunde. Lo adaptamos al caso real.
+  const customLabel = hasMultipleProviders
+    ? 'Custom — agente por agente (multi-provider)'
+    : 'Custom — un modelo por agente';
+
   const { index } = await tuiSelect(
     '\n¿Cómo asignamos los modelos?',
     [
       'Aplicar la sugerencia automática',
       'Asignar el MISMO modelo a todos (preset uniforme)',
-      'Custom — agente por agente (multi-provider)',
+      customLabel,
       'Cancelar y salir',
     ],
     0,
@@ -922,7 +928,8 @@ export async function applyChanges(agentDir, current, target, adapter = null) {
   }
   console.log(green(`\n✓ ${changed} agente(s) actualizado(s).`));
   if (changed > 0) {
-    console.log(dim('\nSi OpenCode está abierto, cambiá de agente (Tab) y volvé para recargar.'));
+    const ideName = adapter && adapter.displayName ? adapter.displayName : 'el IDE';
+    console.log(dim(`\nSi ${ideName} está abierto, cambiá de agente (Tab) y volvé para recargar.`));
   }
   return { changed, backup };
 }
@@ -935,7 +942,12 @@ export async function applyChanges(agentDir, current, target, adapter = null) {
 export async function actionSetModels(adapter) {
   if (!adapter) throw new Error('actionSetModels requires an adapter (IDEAdapter instance).');
   const agentDir = resolvePath(cwd(), adapter.agentDir);
-  const history = [];
+  // El historial siempre arranca con qué IDE estamos configurando — es la
+  // ÚNICA forma que tiene el usuario de saber "estoy modificando .claude o
+  // .opencode" sin volver al menú principal.
+  const history = [
+    { label: 'IDE', value: `${adapter.displayName}  ·  ${adapter.agentDir}/` },
+  ];
 
   // ─── Step 1/4: Detectar providers ──────────────────────────────────
   renderWizardStep(printModelsBanner, history, '[1/4] Detectando providers conectados...');
