@@ -25,7 +25,7 @@ import { cwd, stdin, stdout, exit } from 'node:process';
 
 import { AGENTS_DIR, TEMPLATES_DIR, rl } from './lib/runtime.mjs';
 import { fileExists } from './lib/fs-utils.mjs';
-import { yellow, cyan, green, dim } from './lib/colors.mjs';
+import { yellow, cyan, green, dim, bold } from './lib/colors.mjs';
 import { clearScreen } from './lib/tui.mjs';
 import { printHeader, showHappyGoodbye, showSadGoodbye } from './lib/banners.mjs';
 import { WIZARD_CANCELLED, finalizeAndExit, runAction } from './lib/exit.mjs';
@@ -36,6 +36,8 @@ import { actionSetModels, actionViewModels } from './lib/models.mjs';
 import { actionInstallTools } from './lib/tools.mjs';
 import { actionMemory } from './lib/memory/index.mjs';
 import { detectQdrantStatus } from './lib/memory/engine.mjs';
+import { OpencodeAdapter } from './lib/adapters/opencode.mjs';
+import { ClaudeAdapter } from './lib/adapters/claude.mjs';
 
 // ═══════════════════════════════════════════════════════════════════
 // Menu principal — stack-based con clear screen entre niveles
@@ -109,7 +111,7 @@ async function getMainMenuState(agentDir) {
   return { agentsInstalled, agentCount, vaultPresent, pendingUpdates, memoryInstalled, qdrantRunning };
 }
 
-async function runMainMenu(agentDir) {
+async function runMainMenu(agentDir, adapter) {
   while (true) {
     const state = await getMainMenuState(agentDir);
     renderMainMenuHeader(agentDir, state);
@@ -122,6 +124,13 @@ async function runMainMenu(agentDir) {
       ? 'Memory (RAG)            ' + dim('(instalado · reindex / reset / re-instalar)')
       : 'Memory (RAG)            ' + dim('(instalar engine de búsqueda semántica)');
 
+    // "Instalar Phobos para..." — entry point del wizard. Lista todos los IDE
+    // soportados, marca cuáles ya están instalados, y permite agregar soporte
+    // a uno nuevo. Va primero porque es la acción "raíz" del wizard.
+    // El parenthetical muestra el estado actual ("actual: OpenCode" si solo
+    // hay uno; cuando haya multi-IDE va a listar todos).
+    const installLabel = 'Instalar Phobos para...  ' + dim(`(actual: ${adapter.displayName})`);
+
     // En el menú principal Esc no tiene sentido (no hay "menú padre"),
     // pero si el usuario lo apreta, lo tratamos como "no acción" — solo re-rendereamos.
     let choice;
@@ -129,6 +138,7 @@ async function runMainMenu(agentDir) {
       choice = await tuiSelect(
         '\n¿Qué querés hacer?',
         [
+          installLabel,
           updateLabel,
           'Ver configuración de modelos',
           'Setear modelos de agentes',
@@ -145,22 +155,116 @@ async function runMainMenu(agentDir) {
 
     const { index } = choice;
     if (index === 0) {
-      await runAction(() => actionUpdateAgents());
+      await runAction(() => actionInstallPhobos(adapter));
     } else if (index === 1) {
-      await runAction(() => actionViewModels(agentDir));
+      await runAction(() => actionUpdateAgents());
     } else if (index === 2) {
-      await runAction(() => actionSetModels(agentDir));
+      await runAction(() => actionViewModels(agentDir));
     } else if (index === 3) {
-      await runAction(() => actionInstallTools());
+      await runAction(() => actionSetModels(agentDir));
     } else if (index === 4) {
-      await runAction(() => actionMemory());
+      await runAction(() => actionInstallTools());
     } else if (index === 5) {
+      await runAction(() => actionMemory());
+    } else if (index === 6) {
       clearScreen();
       showHappyGoodbye();
       finalizeAndExit(0);
       return;
     }
   }
+}
+
+// Acción "Instalar Phobos para..." — entry point del wizard, bootstrap-equivalente.
+// Muestra todos los IDE soportados (con su estado actual: instalado / disponible /
+// próximamente) y permite:
+//   - Re-confirmar / re-bootstrappear el IDE ya instalado (caso raro, lo redirige
+//     a "Actualizar agentes" que es más específico).
+//   - Hacer bootstrap de un IDE nuevo en el mismo proyecto.
+//   - Ver el mensaje "próximamente" si el target es stub.
+//
+// "Bootstrap" = crear .<ide>/agent/, .<ide>/command/, y vault/ desde los templates.
+async function actionInstallPhobos(currentAdapter) {
+  clearScreen();
+  printHeader();
+  console.log('');
+  console.log('  ' + cyan('▸ ') + bold('Instalar Phobos para...'));
+  console.log(dim('  Bootstrap crea los archivos del IDE elegido + la estructura del vault'));
+  console.log(dim('  (`.<ide>/agent/`, `.<ide>/command/`, `vault/memory/`, etc.).'));
+  console.log('');
+
+  // Listamos TODOS los adapters conocidos para que el usuario tenga visibilidad
+  // completa del estado (qué está instalado, qué falta, qué está en roadmap).
+  const allAdapters = [
+    new OpencodeAdapter(),
+    new ClaudeAdapter(),
+  ];
+
+  const options = allAdapters.map(a => {
+    const isCurrent = a.id === currentAdapter.id;
+    let suffix;
+    if (isCurrent) {
+      suffix = dim('   (ya instalado)');
+    } else if (!a.isImplemented) {
+      suffix = dim('   (próximamente)');
+    } else {
+      suffix = dim('   (disponible — bootstrap)');
+    }
+    return `${a.displayName}${suffix}`;
+  });
+  options.push(dim('← Volver al menú principal'));
+
+  let choice;
+  try {
+    choice = await tuiSelect('\n¿Para qué IDE?', options, allAdapters.length);
+  } catch (err) {
+    if (err === WIZARD_CANCELLED) return;
+    throw err;
+  }
+
+  const { index } = choice;
+  if (index === allAdapters.length) return; // "Volver"
+
+  const target = allAdapters[index];
+
+  // Caso 1: ya está instalado
+  if (target.id === currentAdapter.id) {
+    console.log('');
+    console.log('  ' + green('✓ ') + target.displayName + ' ya está instalado en este proyecto.');
+    console.log('');
+    console.log(dim('  Si querés refrescar los templates (.md) a la última versión, usá'));
+    console.log(dim('  "Actualizar agentes" en el menú principal. Esa acción detecta diffs entre'));
+    console.log(dim('  los templates del repo y los archivos locales, y aplica updates selectivos.'));
+    console.log('');
+    return;
+  }
+
+  // Caso 2: no instalado, stub (no implementado)
+  if (!target.isImplemented) {
+    clearScreen();
+    printHeader();
+    console.log('');
+    console.log('  ' + cyan('▸ ') + 'Phobos para ' + target.displayName);
+    console.log('');
+    console.log('  ' + yellow('Próximamente — en desarrollo.'));
+    console.log('');
+    console.log(dim('  La integración con ' + target.displayName + ' está en la roadmap pero todavía no'));
+    console.log(dim('  está implementada. Tu instalación de ' + currentAdapter.displayName + ' sigue intacta.'));
+    console.log('');
+    return;
+  }
+
+  // Caso 3: no instalado, implementado → bootstrap del target.
+  // En Fase 2, ensureBootstrap va a recibir el adapter como parámetro y va a
+  // crear los archivos en .<target.id>/... usando templates de scripts/templates/<target.id>/.
+  // Por ahora (Fase 1), ensureBootstrap está hardcoded a OpenCode, así que este
+  // caso NO se dispara con la combinación actual (solo OpenCode está implementado
+  // y si llegaste acá es porque ya estaba instalado, caso 1).
+  console.log('');
+  console.log(dim('  Bootstrap para ' + target.displayName + ' — implementación pendiente (Fase 2).'));
+  console.log(dim('  Cuando ensureBootstrap reciba el adapter como param, esto crea automáticamente'));
+  console.log(dim('  los archivos en .' + target.id + '/agent/ y .' + target.id + '/command/.'));
+  console.log('');
 }
 
 // Red de seguridad: en raw mode Node intercepta Ctrl+C como keypress en vez
@@ -171,6 +275,81 @@ process.on('SIGINT', () => {
   console.log('\n' + dim('(salida)'));
   finalizeAndExit(130);
 });
+
+// Selección de target IDE. Para cada adapter implementado, instancia y devuelve.
+// Para stubs (isImplemented = false), muestra "próximamente, en desarrollo" y
+// devuelve null para que main() cierre limpio.
+async function selectTarget() {
+  // Adapters disponibles. Orden = orden en que aparecen en el menú.
+  // Para agregar un IDE nuevo: importar el adapter y agregarlo a esta lista.
+  const adapters = [
+    new OpencodeAdapter(),
+    new ClaudeAdapter(),
+  ];
+
+  const options = adapters.map(a => {
+    const suffix = a.isImplemented ? '' : dim('   (próximamente)');
+    return `Instalar para ${a.displayName}${suffix}`;
+  });
+  options.push(dim('Salir'));
+
+  let choice;
+  try {
+    choice = await tuiSelect(
+      '\n¿Para qué IDE configurás Phobos?',
+      options,
+      0,
+    );
+  } catch (err) {
+    if (err === WIZARD_CANCELLED) return null;
+    throw err;
+  }
+
+  const { index } = choice;
+  if (index === adapters.length) return null; // "Salir"
+
+  const adapter = adapters[index];
+  if (!adapter.isImplemented) {
+    clearScreen();
+    printHeader();
+    console.log('');
+    console.log('  ' + cyan('▸ ') + 'Phobos para ' + adapter.displayName);
+    console.log('');
+    console.log('  ' + yellow('Próximamente — en desarrollo.'));
+    console.log('');
+    console.log(dim('  La integración con ' + adapter.displayName + ' está en la roadmap pero todavía no'));
+    console.log(dim('  está implementada. Por ahora solo soportamos OpenCode.'));
+    console.log('');
+    console.log(dim('  Cuando esté lista, este wizard te va a permitir bootstrappear el mismo'));
+    console.log(dim('  flow SDD (Researcher / Planner / Programmer / Tester / Archivist) pero'));
+    console.log(dim('  contra ' + adapter.displayName + ' en lugar de OpenCode.'));
+    console.log('');
+    return null;
+  }
+
+  return adapter;
+}
+
+// Auto-detección: chequea cuál IDE ya está bootstrapped en este proyecto.
+// Devuelve el adapter correspondiente, o null si nada está instalado.
+//
+// Política para múltiples instalaciones simultáneas (futuro): si hay más de
+// un IDE instalado, devolver el primero según orden de prioridad (OpenCode > Claude).
+// El menú "Instalar para otro IDE" permite agregar el segundo target.
+async function detectInstalledAdapter() {
+  const candidates = [new OpencodeAdapter(), new ClaudeAdapter()];
+  for (const adapter of candidates) {
+    // No probamos paths de adapters no implementados (sus getters tiran).
+    if (!adapter.isImplemented) continue;
+    try {
+      const phobosPath = join(resolve(cwd(), adapter.agentDir), 'phobos.md');
+      if (await fileExists(phobosPath)) return adapter;
+    } catch {
+      // adapter.agentDir tiró → adapter mal implementado, salteamos.
+    }
+  }
+  return null;
+}
 
 async function main() {
   clearScreen();
@@ -184,12 +363,19 @@ async function main() {
     return;
   }
 
-  const agentDir = resolve(cwd(), AGENTS_DIR);
-  const phobosPath = join(agentDir, 'phobos.md');
-  const isExistingInstall = await fileExists(phobosPath);
+  // Auto-detect: ¿hay una instalación previa de algún IDE en este proyecto?
+  let adapter = await detectInstalledAdapter();
 
-  if (!isExistingInstall) {
-    // Primera instalación — bootstrap obligatorio antes del menú
+  if (!adapter) {
+    // Nada instalado — primer arranque. Acá SÍ pedimos al usuario qué IDE.
+    adapter = await selectTarget();
+    if (!adapter) {
+      finalizeAndExit(0);
+      return;
+    }
+
+    // Bootstrap para el target elegido (Fase 1: módulos siguen usando globals
+    // viejos, así que ensureBootstrap funciona como antes para OpenCode).
     const bootstrapped = await ensureBootstrap();
     if (!bootstrapped) {
       showSadGoodbye();
@@ -197,18 +383,23 @@ async function main() {
       return;
     }
   }
+  // Caso "ya hay instalación": directo al menú principal con el adapter
+  // detectado. No mostramos selectTarget — operaciones del menú son
+  // auto-detect / IDE-agnostic o trabajan sobre lo que ya está instalado.
+
+  const agentDir = resolve(cwd(), adapter.agentDir);
 
   try {
     await readdir(agentDir);
   } catch {
-    console.error(yellow(`\n✗ No encontré ${AGENTS_DIR} en ${cwd()}`));
+    console.error(yellow(`\n✗ No encontré ${adapter.agentDir} en ${cwd()}`));
     console.error('  Algo salió mal con el bootstrap. Verificá los permisos de escritura.');
     finalizeAndExit(1);
     return;
   }
 
   // Entrar al menú principal — loop hasta que el usuario elija Salir
-  await runMainMenu(agentDir);
+  await runMainMenu(agentDir, adapter);
 }
 
 main().catch((err) => {
