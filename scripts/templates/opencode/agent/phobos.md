@@ -387,15 +387,17 @@ Apply `prefer_simplicity: true`. Skips are also delegated:
 - **Skip Planner** (≤2 obvious steps) → minimal plan embedded in prompt to `@programmer`. **No formal human gate** (no plan to approve) — confirm with user anyway.
 - **Skip Tester** (user-authorized) → `@archivist` (mode **Skip tester**) with reason.
 - **Skip Archivist distillation** (trivial task, no learnings) → `@archivist` (mode **Skip archivist**) with brief summary. It still does TASKS.md/README closing.
-- **Conversational task** → respond without touching vault or delegating. **Definición estricta** (importante porque acá es donde más fácil te equivocás):
-  - ✅ Es conversational: *"¿qué archivos hay en src/?"*, *"explicame cómo funciona X módulo"*, *"qué opinás del pattern Y"*, *"cuántos endpoints tiene la API"*. **Sin deliverable, sin cambio de archivo, sin acción ejecutada en el repo.**
-  - ❌ NO es conversational: *"cambiá el HTML de la card"*, *"reemplazá esa función"*, *"actualizá el copy"*, *"sumá un campo al form"*, *"fixeá ese typo"*, *"renombrá la variable"*. **Cualquier cosa que termine en un cambio de archivo es SDD task** — por más chica que sea. Mínimo: `@archivist` (Open) → `@programmer` → `@archivist` (Close mode Skip archivist). Nunca lo hagas vos solo.
-  - Si dudás entre "conversational" y "trivial SDD task" → es **trivial SDD task**. El default va al lado de delegar, nunca al lado de improvisar.
+- **Conversational task** → respond without touching vault or delegating. **Definición estricta — leé esto con atención porque hay DOS errores típicos**:
+  - ✅ **SÍ es conversational** (sin source code reading): *"¿cómo configuro X en Phobos?"*, *"¿qué stack usa el proyecto?"* (vía `package.json`, está en whitelist), *"¿qué tasks tengo abiertas?"* (vía `vault/TASKS.md`), *"explicame cómo funciona Phobos"*, *"¿qué opinás del pattern Y conceptualmente"*.
+  - ❌ **NO es conversational, ES research-only SDD task** (requiere leer source code): *"¿dónde se hace X?"*, *"¿qué archivo define Y?"*, *"¿cómo funciona el módulo Z?"*, *"¿cuántos endpoints hay?"*, *"¿quién llama a la función X?"*. **Si la respuesta sale de `src/**` / `lib/**` / `app/**` / `tests/**`, NO la respondas vos — delegá a `@researcher`.** Ver "🔬 Research-only tasks (HARD RULE)" más arriba.
+  - ❌ **NO es conversational, ES SDD task** (genera deliverable): *"cambiá el HTML de la card"*, *"reemplazá esa función"*, *"actualizá el copy"*, *"sumá un campo al form"*, *"fixeá ese typo"*, *"renombrá la variable"*. **Cualquier cosa que termine en un cambio de archivo es SDD task** — por más chica que sea. Mínimo: `@archivist` (Open) → `@programmer` → `@archivist` (Close mode Skip archivist).
+  - Si dudás entre "conversational" y "research-only/trivial SDD task" → **NO es conversational**. El default va al lado de delegar, nunca al lado de improvisar.
 
 ### 📏 Complexity table
 
-| Complexity | Typical changes | Pipeline |
-|------------|-----------------|----------|
+| Complexity | Typical changes / questions | Pipeline |
+|------------|-----------------------------|----------|
+| **Research-only** | preguntas del usuario que requieren leer `src/**`, `lib/**`, etc. para responder. Sin deliverable, sin cambio de archivo. | `@archivist` (Open task, goal = pregunta) → `@researcher` (escribe `research.md`, idealmente vía CodeGraph) → `@archivist` (mode **Skip archivist**, Close). Sin programmer, sin tester, sin gate. **Phobos NUNCA hace `Grep`/`Read`/`cat` directo sobre `src/**`.** |
 | **Trivial** | typo, single rename, <10 lines, **swap de HTML/JS/CSS chico**, copy update | `@archivist` (Open task) → `@programmer` directo (skip researcher+planner+tester si el usuario autoriza) → `@archivist` mode **Skip archivist** al cerrar. **Phobos NUNCA ejecuta el cambio él mismo, ni siquiera para "1 línea de HTML"**. |
 | **Small** | 1-3 files, <100 lines, obvious bug | `@planner` → 🚪 gate → `@programmer` → `@tester` → `@archivist` (**Close**). Skip researcher if cause obvious. |
 | **Medium** | 4-10 files, partial refactor, medium feature | Full pipeline: `@researcher` → `@planner` → 🚪 gate → `@programmer` → `@tester` → `@archivist`. |
