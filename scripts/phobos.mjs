@@ -254,17 +254,24 @@ async function actionInstallPhobos(currentAdapter) {
     return;
   }
 
-  // Caso 3: no instalado, implementado → bootstrap del target.
-  // En Fase 2, ensureBootstrap va a recibir el adapter como parámetro y va a
-  // crear los archivos en .<target.id>/... usando templates de scripts/templates/<target.id>/.
-  // Por ahora (Fase 1), ensureBootstrap está hardcoded a OpenCode, así que este
-  // caso NO se dispara con la combinación actual (solo OpenCode está implementado
-  // y si llegaste acá es porque ya estaba instalado, caso 1).
+  // Caso 3: no instalado, implementado → bootstrap del target en este proyecto.
+  // ensureBootstrap detecta qué falta para `target` y pregunta confirmación
+  // antes de crear los archivos en .<target.id>/agent/, .<target.id>/command/
+  // y vault/ (este último compartido entre IDEs).
   console.log('');
-  console.log(dim('  Bootstrap para ' + target.displayName + ' — implementación pendiente (Fase 2).'));
-  console.log(dim('  Cuando ensureBootstrap reciba el adapter como param, esto crea automáticamente'));
-  console.log(dim('  los archivos en .' + target.id + '/agent/ y .' + target.id + '/command/.'));
+  console.log('  ' + cyan('▸ ') + 'Bootstrap de Phobos para ' + bold(target.displayName));
   console.log('');
+  const ok = await ensureBootstrap(target);
+  if (ok) {
+    console.log('');
+    console.log('  ' + green('✓ ') + target.displayName + ' instalado.');
+    if (target.id === 'claude') {
+      console.log('');
+      console.log(dim('  Para usar Phobos en este proyecto, ejecutá:'));
+      console.log('    ' + cyan('claude --agent phobos'));
+    }
+    console.log('');
+  }
 }
 
 // Red de seguridad: en raw mode Node intercepta Ctrl+C como keypress en vez

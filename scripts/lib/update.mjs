@@ -37,7 +37,10 @@ export async function scanForUpdates(adapter) {
       continue;
     }
 
-    const tmpl = await readFile(templatePath, 'utf-8');
+    // Leer template y aplicar transform si corresponde (ej: Claude target lee
+    // de templates de OpenCode y los transforma).
+    const tmplRaw = await readFile(templatePath, 'utf-8');
+    const tmpl = await applyTransform(tmplRaw, f, adapter);
     const local = await readFile(localPath, 'utf-8');
 
     const tmplCmp = f.ignoreModel ? normalizeIgnoringModel(tmpl) : tmpl;
@@ -53,15 +56,25 @@ export async function scanForUpdates(adapter) {
   return result;
 }
 
-export async function applyUpdate(file, { preserveLocalModel = true } = {}) {
+// Aplica el transform del adapter si el archivo lo declara.
+// Devuelve el contenido transformado (o el original si no hay transform).
+async function applyTransform(content, file, adapter) {
+  if (!file.transform || !adapter) return content;
+  const fnName = `transform${file.transform.charAt(0).toUpperCase()}${file.transform.slice(1)}`;
+  if (typeof adapter[fnName] !== 'function') return content;
+  const agentName = file.dst.split(/[\\/]/).pop().replace(/\.md$/, '');
+  return adapter[fnName](content, agentName);
+}
+
+export async function applyUpdate(file, { preserveLocalModel = true, adapter = null } = {}) {
   const tmpl = await readFile(file.templatePath, 'utf-8');
-  let content = tmpl;
+  let content = await applyTransform(tmpl, file, adapter);
 
   if (file.ignoreModel && preserveLocalModel) {
     const local = await readFile(file.localPath, 'utf-8');
     const m = local.match(/^model:\s*(.+)$/m);
     if (m) {
-      content = tmpl.replace(/^model:\s*.+$/m, `model: ${m[1].trim()}`);
+      content = content.replace(/^model:\s*.+$/m, `model: ${m[1].trim()}`);
     }
   }
   // Si preserveLocalModel=false, dejamos el modelo del template intacto.
@@ -79,8 +92,9 @@ export async function getTemplateModel(file) {
   }
 }
 
-export async function copyTemplateFile(file) {
-  const content = await readFile(file.templatePath, 'utf-8');
+export async function copyTemplateFile(file, { adapter = null } = {}) {
+  const tmpl = await readFile(file.templatePath, 'utf-8');
+  const content = await applyTransform(tmpl, file, adapter);
   // safeWriteFile crea el dirname y valida path/symlinks.
   await safeWriteFile(file.localPath, content);
 }
@@ -116,7 +130,8 @@ export function showAgentDiff(file) {
 // runUpdateWizard — Step 4 cuando se eligió "Revisar uno por uno".
 // Recibe `history` mutable: cada archivo procesado agrega una línea al historial
 // superior y limpia la pantalla en el siguiente archivo.
-export async function runUpdateWizard(history, updates) {
+// `adapter` permite aplicar el transform del IDE target al template antes de escribirlo.
+export async function runUpdateWizard(history, updates, adapter = null) {
   for (let i = 0; i < updates.outdated.length; i++) {
     const f = updates.outdated[i];
     const fileName = basename(f.dst);
@@ -156,14 +171,14 @@ export async function runUpdateWizard(history, updates) {
       const idxSkip = modelsDiffer ? 3 : 2;
 
       if (index === idxPreserve) {
-        await applyUpdate(f, { preserveLocalModel: true });
+        await applyUpdate(f, { preserveLocalModel: true, adapter });
         history.push({
           label: `  · ${fileName}`,
           value: `actualizado, modelo preservado (${localModel})`,
         });
         break;
       } else if (index === idxAcceptTemplate) {
-        await applyUpdate(f, { preserveLocalModel: false });
+        await applyUpdate(f, { preserveLocalModel: false, adapter });
         history.push({
           label: `  · ${fileName}`,
           value: `actualizado, modelo del template (${templateModel})`,
@@ -211,7 +226,7 @@ export async function runUpdateWizard(history, updates) {
     );
     if (create) {
       for (const m of updates.missing) {
-        await copyTemplateFile(m);
+        await copyTemplateFile(m, { adapter });
         history.push({
           label: `  · ${basename(m.dst)}`,
           value: 'creado desde template',
@@ -226,8 +241,11 @@ export async function runUpdateWizard(history, updates) {
   }
 }
 
-export async function backupAgents(filesToBackup) {
+export async function backupAgents(filesToBackup, backupBase = '.opencode/agent_backup/phobos') {
   // filesToBackup: array de paths relativos al cwd (ej: '.opencode/agent/phobos.md')
+  // backupBase: directorio base donde se crea el subdirectorio <ts>/ con la copia.
+  //   Default: '.opencode/agent_backup/phobos' (OpenCode). Para Claude el caller
+  //   pasa '.claude/agents_backup/phobos'.
   // Si está vacío, no hace nada. Devuelve { backupRel, count } cuando crea backup;
   // null cuando no había archivos que copiar (para que el caller pueda decidir
   // si mostrar info al usuario).
@@ -245,7 +263,7 @@ export async function backupAgents(filesToBackup) {
     String(now.getMinutes()).padStart(2, '0') +
     String(now.getSeconds()).padStart(2, '0');
 
-  const backupRel = `.opencode/agent_backup/phobos/${ts}`;
+  const backupRel = `${backupBase}/${ts}`;
   const backupDir = join(cwd(), backupRel);
   await mkdir(backupDir, { recursive: true });
 
@@ -270,19 +288,19 @@ export async function backupAgents(filesToBackup) {
   return { backupRel, count: copied, files: names };
 }
 
-export async function runUpdateAll(updates) {
+export async function runUpdateAll(updates, adapter = null) {
   for (const f of updates.outdated) {
-    await applyUpdate(f);
+    await applyUpdate(f, { adapter });
     console.log(green('  ✓ ' + basename(f.dst) + ' actualizado.'));
   }
   for (const m of updates.missing) {
-    await copyTemplateFile(m);
+    await copyTemplateFile(m, { adapter });
     console.log(green('  ✓ ' + basename(m.dst) + ' creado.'));
   }
 }
 
-export async function ensureUpdated() {
-  const updates = await scanForUpdates();
+export async function ensureUpdated(adapter) {
+  const updates = await scanForUpdates(adapter);
   const nothingToDo = updates.outdated.length === 0 && updates.missing.length === 0;
 
   if (nothingToDo) {
@@ -333,7 +351,7 @@ export async function ensureUpdated() {
   }
 
   if (index === 0) {
-    await runUpdateWizard(updates);
+    await runUpdateWizard([], updates);
   } else if (index === 1) {
     await runUpdateAll(updates);
   }
@@ -436,11 +454,11 @@ export async function actionUpdateAgents(adapter) {
   if (index === 0) {
     // Modo "Revisar uno por uno" — runUpdateWizard hace su propio renderWizardStep
     // por cada archivo y va agregando entries al history.
-    await runUpdateWizard(history, updates);
+    await runUpdateWizard(history, updates, adapter);
   } else {
     // Modo "Aplicar todas" — un solo render + ejecución en bloque
     renderWizardStep(printUpdateBanner, history, '[4/4] Aplicar todas las actualizaciones');
-    await runUpdateAll(updates);
+    await runUpdateAll(updates, adapter);
     history.push({
       label: 'Aplicado',
       value: `${totalOutdated + totalMissing} archivo${(totalOutdated + totalMissing) > 1 ? 's' : ''} actualizado${(totalOutdated + totalMissing) > 1 ? 's' : ''}`,

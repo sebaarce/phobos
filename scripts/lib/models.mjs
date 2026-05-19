@@ -122,8 +122,18 @@ function scoreModel(agent, modelId) {
   return score;
 }
 
-export function recommendForAgent(agent, allModels) {
-  // Override por provider preferido (ej: Zen → "camino B" coherente con cache + costo por rol).
+export function recommendForAgent(agent, allModels, adapter = null) {
+  // 1) Override del adapter — Claude define modelos por agente explícitamente
+  // (ej: phobos → inherit, researcher → haiku). Si el adapter tiene una
+  // recomendación y está en la lista disponible, usarla sin scoring.
+  if (adapter && typeof adapter.defaultModelForAgent === 'function') {
+    const adapterDefault = adapter.defaultModelForAgent(agent);
+    if (adapterDefault && allModels.includes(adapterDefault)) {
+      return adapterDefault;
+    }
+  }
+
+  // 2) Override por provider preferido (ej: Zen → "camino B" coherente con cache + costo por rol).
   const preferred = matchPreferred(agent, allModels);
   if (preferred) return preferred;
 
@@ -289,12 +299,18 @@ export function summarizeDetection(detected) {
   }
 }
 
-export async function getFinalModelList(detected) {
+export async function getFinalModelList(detected, adapter = null) {
   let list = Array.from(detected.models.keys());
+  // Formato del ID esperado — depende del IDE.
+  //   OpenCode: provider/modelo (ej: github-copilot/claude-sonnet-4-6)
+  //   Claude:   alias o full ID (ej: sonnet, inherit, claude-sonnet-4-6)
+  const idFormat = adapter && adapter.id === 'claude'
+    ? 'alias o full ID Claude'
+    : 'provider/modelo';
 
   if (list.length === 0) {
     console.log(yellow('\n⚠ No se detectaron modelos automáticamente.'));
-    console.log('  Pegá los IDs disponibles, uno por línea (desde el selector de OpenCode).');
+    console.log(`  Pegá los IDs disponibles, uno por línea (formato: ${cyan(idFormat)}).`);
     console.log(dim('  Línea vacía + ENTER para terminar.\n'));
     while (true) {
       const line = (await rl.question('  > ')).trim();
@@ -308,9 +324,9 @@ export async function getFinalModelList(detected) {
     return list;
   }
 
-  const wantsManual = await tuiYesNo('\n¿Querés especificar manualmente el proveedor y modelo para los agentes?', false);
+  const wantsManual = await tuiYesNo('\n¿Querés agregar manualmente modelos extra para los agentes?', false);
   if (wantsManual) {
-    console.log(dim('\n  Pegá uno por línea (formato: ' + cyan('provider/modelo') + dim('), vacío para terminar.\n')));
+    console.log(dim('\n  Pegá uno por línea (formato: ' + cyan(idFormat) + dim('), vacío para terminar.\n')));
     while (true) {
       const line = (await rl.question('  > ')).trim();
       if (!line) break;
@@ -670,7 +686,7 @@ export function renderSuggestionPanel(recommended, current) {
 
 // chooseMode — Step 3 del wizard. Recibe `history` mutable: cada sub-decisión
 // agrega una línea al historial superior y limpia la pantalla en el siguiente sub-step.
-export async function chooseMode(history, allModels, current) {
+export async function chooseMode(history, allModels, current, adapter = null) {
   const detectedProviders = Array.from(new Set(allModels.map(m => getProvider(m)))).sort();
   const hasMultipleProviders = detectedProviders.length > 1;
 
@@ -693,7 +709,7 @@ export async function chooseMode(history, allModels, current) {
   // "modelo sugerido" del header de cada agente. NO se muestran al elegir
   // estrategia; el panel solo aparece después de elegir Auto + provider.
   const recommendedCross = Object.fromEntries(
-    AGENTS.map(a => [a, recommendForAgent(a, allModels)])
+    AGENTS.map(a => [a, recommendForAgent(a, allModels, adapter)])
   );
 
   const { index } = await tuiSelect(
@@ -743,7 +759,7 @@ export async function chooseMode(history, allModels, current) {
     // Recomendaciones scopeadas al provider elegido — si para algún rol no
     // hay match en ese scope, caemos al cross-provider de fallback.
     const suggestion = Object.fromEntries(
-      AGENTS.map(a => [a, recommendForAgent(a, modelsScope) || recommendedCross[a]])
+      AGENTS.map(a => [a, recommendForAgent(a, modelsScope, adapter) || recommendedCross[a]])
     );
 
     // Recién acá mostramos el panel — el usuario ya eligió Auto y eligió
@@ -875,7 +891,7 @@ export function printDiff(current, target) {
   return any;
 }
 
-export async function applyChanges(agentDir, current, target) {
+export async function applyChanges(agentDir, current, target, adapter = null) {
   // Determinar primero qué agentes efectivamente cambian — backup-eamos solo
   // esos para evitar copias inútiles y mantener el directorio de backup limpio.
   const agentsToChange = AGENTS.filter(a => current[a] !== target[a]);
@@ -886,10 +902,14 @@ export async function applyChanges(agentDir, current, target) {
   }
 
   // Backup silencioso pre-escritura. Reusa el helper de update.mjs para
-  // mantener un solo formato de backup (`.opencode/agent_backup/phobos/<ts>/`)
-  // independientemente del wizard que lo dispare.
-  const filesToBackup = agentsToChange.map(a => `.opencode/agent/${a}.md`);
-  const backup = await backupAgents(filesToBackup);
+  // mantener un solo formato de backup independientemente del wizard que lo
+  // dispare. Paths derivados del adapter (default: OpenCode para compat).
+  const agentRel = adapter ? adapter.agentDir : '.opencode/agent';
+  const backupBase = adapter && typeof adapter.backupBaseDir === 'function'
+    ? adapter.backupBaseDir()
+    : '.opencode/agent_backup/phobos';
+  const filesToBackup = agentsToChange.map(a => `${agentRel}/${a}.md`);
+  const backup = await backupAgents(filesToBackup, backupBase);
 
   let changed = 0;
   for (const agent of agentsToChange) {
@@ -919,16 +939,15 @@ export async function actionSetModels(adapter) {
 
   // ─── Step 1/4: Detectar providers ──────────────────────────────────
   renderWizardStep(printModelsBanner, history, '[1/4] Detectando providers conectados...');
-  const detected = await detect();
+  const detected = await adapter.listAvailableModels();
 
   if (detected.providers.size === 0) {
-    console.log('  ' + yellow('✗ No detecté proveedores conectados en OpenCode.'));
+    const help = adapter.noProvidersHelp();
+    console.log('  ' + yellow('✗ ' + (help[0] || `No detecté proveedores para ${adapter.displayName}.`)));
     console.log('');
-    console.log('  ' + dim('Para configurar modelos necesitás al menos un proveedor conectado.'));
-    console.log('');
-    console.log('  ' + bold('Para conectar uno:'));
-    console.log('    ' + dim('1.') + ' Iniciá OpenCode con  ' + cyan('opencode'));
-    console.log('    ' + dim('2.') + ' Agregá un proveedor con  ' + cyan('/connect'));
+    for (const line of help.slice(1)) {
+      console.log('  ' + (line === '' ? '' : dim(line)));
+    }
     console.log('');
     await pressEnterToContinue();
     return;
@@ -942,7 +961,7 @@ export async function actionSetModels(adapter) {
 
   // ─── Step 2/4: Definir lista de modelos a asignar ──────────────────
   renderWizardStep(printModelsBanner, history, '[2/4] Definir lista de modelos a asignar');
-  const allModels = await getFinalModelList(detected);
+  const allModels = await getFinalModelList(detected, adapter);
   if (!allModels || allModels.length === 0) {
     console.log('\n  ' + yellow('Lista vacía — no se puede continuar.'));
     await pressEnterToContinue();
@@ -958,7 +977,7 @@ export async function actionSetModels(adapter) {
   //    y va agregando entries al historial: Provider, Estrategia, y por agente
   //    si se eligió custom)
   const current = await readCurrentModels(agentDir);
-  const target = await chooseMode(history, allModels, current);
+  const target = await chooseMode(history, allModels, current, adapter);
   if (!target) {
     history.push({ label: 'Asignación', value: 'Cancelado por el usuario' });
     renderWizardStep(printModelsBanner, history, '');
@@ -976,10 +995,10 @@ export async function actionSetModels(adapter) {
   if (hasChanges) {
     const confirm = await tuiYesNo('\n¿Aplicar los cambios?', false);
     if (confirm) {
-      applyResult = await applyChanges(agentDir, current, target);
+      applyResult = await applyChanges(agentDir, current, target, adapter);
       history.push({
         label: 'Aplicado',
-        value: `${agentsToChange.length} cambio${agentsToChange.length > 1 ? 's' : ''} persistido${agentsToChange.length > 1 ? 's' : ''} en .opencode/agent/`,
+        value: `${agentsToChange.length} cambio${agentsToChange.length > 1 ? 's' : ''} persistido${agentsToChange.length > 1 ? 's' : ''} en ${adapter.agentDir}/`,
       });
       if (applyResult?.backup?.backupRel) {
         history.push({
@@ -1002,7 +1021,7 @@ export async function actionSetModels(adapter) {
     console.log('');
     console.log('  ' + dim('↺ Backup previo de los archivos modificados:'));
     console.log('    ' + cyan(applyResult.backup.backupRel + '/'));
-    console.log('  ' + dim('  Si querés revertir un cambio: ') + dim('copiá el archivo desde ese directorio al .opencode/agent/.'));
+    console.log('  ' + dim('  Si querés revertir un cambio: ') + dim(`copiá el archivo desde ese directorio al ${adapter.agentDir}/.`));
   }
   await pressEnterToContinue();
 }

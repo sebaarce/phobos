@@ -128,6 +128,46 @@ export class IDEAdapter {
     return { providers: [], notes: ['detectAuthProviders not implemented'] };
   }
 
+  // ─── Catálogo de modelos disponibles ──────────────────────────────
+
+  /**
+   * Lista de modelos disponibles para este IDE. Cada adapter define cómo
+   * los descubre (CLI subcommand, auth.json, lista estática, etc.).
+   * Shape esperado para que `actionSetModels` sea target-agnostic:
+   *   {
+   *     models: Map<string, string>,   // id → source ("opencode models" | "claude (static)" | ...)
+   *     providers: Set<string>,         // providers configurados
+   *     notes: string[],                // mensajes informativos para el usuario
+   *   }
+   * @returns {Promise<{models: Map<string,string>, providers: Set<string>, notes: string[]}>}
+   */
+  async listAvailableModels() {
+    throw new Error(`${this.constructor.name} must override listAvailableModels()`);
+  }
+
+  /**
+   * Modelo recomendado por defecto para un agente dado. Usado por el wizard
+   * cuando todavía no hay un modelo asignado o cuando el usuario elige "auto".
+   * @param {string} agentName  ej: 'phobos' | 'researcher' | ...
+   * @returns {string}  ej: 'inherit' | 'sonnet' | 'github-copilot/claude-sonnet-4-6'
+   */
+  defaultModelForAgent(agentName) {
+    throw new Error(`${this.constructor.name} must override defaultModelForAgent()`);
+  }
+
+  /**
+   * Mensaje (UI) a mostrar cuando `listAvailableModels` devuelve 0 providers.
+   * Permite a cada adapter dar instrucciones específicas (ej: "iniciá OpenCode
+   * con /connect" vs "configurá ANTHROPIC_API_KEY").
+   * @returns {string[]}  líneas de texto a mostrar (sin colores)
+   */
+  noProvidersHelp() {
+    return [
+      `No detecté proveedores conectados para ${this.displayName}.`,
+      'Configurá al menos uno antes de continuar.',
+    ];
+  }
+
   // ─── Manipulación del frontmatter del agente ──────────────────────
 
   /**

@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { env, platform } from 'node:process';
 import { IDEAdapter } from './base.mjs';
-import { fileExists, tryExec } from '../fs-utils.mjs';
+import { fileExists, tryExec, assertSafeShellArg } from '../fs-utils.mjs';
 
 export class OpencodeAdapter extends IDEAdapter {
   // ─── Identidad ─────────────────────────────────────────────────────
@@ -153,4 +153,86 @@ export class OpencodeAdapter extends IDEAdapter {
 
     return { providers: Array.from(providers), notes };
   }
+
+  // ─── Catálogo de modelos disponibles ───────────────────────────────
+
+  // OpenCode descubre modelos dinámicamente vía `opencode models` (lista
+  // canónica) + `opencode models <provider>` (algunos providers exponen
+  // modelos extra). El provider proviene de auth.json — validado contra
+  // un regex antes de pasar al shell.
+  async listAvailableModels() {
+    const result = { models: new Map(), providers: new Set(), notes: [] };
+
+    // 1) Providers desde auth.json
+    const auth = await this.detectAuthProviders();
+    for (const p of auth.providers) result.providers.add(p);
+    for (const n of auth.notes) result.notes.push(n);
+
+    // 2) Lista canónica
+    const allR = tryExec('opencode models', 20000);
+    if (allR.ok && allR.out) {
+      for (const id of parseModelsList(allR.out)) {
+        result.models.set(id, 'opencode models');
+        const slash = id.indexOf('/');
+        if (slash >= 0) result.providers.add(id.substring(0, slash));
+      }
+    } else {
+      result.notes.push('opencode models no devolvió nada — posible problema de auth');
+    }
+
+    // 3) Por provider (algunos exponen modelos no incluidos en el default).
+    const PROVIDER_PATTERN = /^[a-zA-Z0-9_-]+$/;
+    for (const provider of result.providers) {
+      let safe;
+      try {
+        safe = assertSafeShellArg(provider, 'provider', PROVIDER_PATTERN);
+      } catch {
+        result.notes.push(`Provider "${String(provider).slice(0, 40)}" tiene caracteres no válidos — salteado por seguridad.`);
+        continue;
+      }
+      const r = tryExec(`opencode models ${safe}`, 12000);
+      if (r.ok && r.out) {
+        for (const id of parseModelsList(r.out)) {
+          if (!result.models.has(id)) {
+            result.models.set(id, `opencode models ${safe}`);
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  // OpenCode no fija un modelo por agente — el wizard usa heurísticas
+  // (PROFILE_WEIGHTS) sobre la lista detectada. Devolvemos null para
+  // señalar "usá la heurística".
+  defaultModelForAgent(_agentName) {
+    return null;
+  }
+
+  backupBaseDir() {
+    // Mantenemos el nombre histórico (.opencode/agent_backup/phobos) para
+    // que usuarios existentes encuentren sus backups donde siempre estuvieron.
+    return '.opencode/agent_backup/phobos';
+  }
+
+  noProvidersHelp() {
+    return [
+      'No detecté proveedores conectados en OpenCode.',
+      '',
+      'Para configurar modelos necesitás al menos un proveedor conectado.',
+      '',
+      'Para conectar uno:',
+      '  1. Iniciá OpenCode con  opencode',
+      '  2. Agregá un proveedor con  /connect',
+    ];
+  }
+}
+
+// Util local — copia la lógica de parseModelsList de models.mjs para no
+// crear una dependencia circular (models.mjs → adapter → models.mjs).
+function parseModelsList(output) {
+  return output.split('\n')
+    .map(l => l.trim())
+    .filter(l => l && /^[a-z][a-z0-9_-]*\/[a-z0-9._-]+$/i.test(l));
 }

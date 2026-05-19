@@ -72,7 +72,7 @@ const GROUP_LABELS = {
   vault:    'Creando estructura de memory',
 };
 
-export async function bootstrap(missing) {
+export async function bootstrap(missing, adapter) {
   console.log(bold('\n  Bootstrap iniciado.\n'));
 
   // Render groups in a stable order: known groups first (agentes, comandos,
@@ -91,7 +91,19 @@ export async function bootstrap(missing) {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const src = join(TEMPLATES_DIR, file.src);
-      const content = await readFile(src, 'utf-8');
+      let content = await readFile(src, 'utf-8');
+
+      // Si el archivo declara un transform, delegamos al adapter.
+      // Esto permite que adapters específicos (ej: ClaudeAdapter) reescriban
+      // el frontmatter de los templates de OpenCode antes de escribirlos
+      // al destino. Single source of truth, transform per IDE.
+      if (file.transform && adapter && typeof adapter[`transform${capitalize(file.transform)}`] === 'function') {
+        // Derivar nombre del agente desde el filename (sin extensión) para
+        // ayudar al transformer cuando aplique (ej: phobos.md → "phobos").
+        const agentName = file.dst.split(/[\\/]/).pop().replace(/\.md$/, '');
+        content = adapter[`transform${capitalize(file.transform)}`](content, agentName);
+      }
+
       // safeWriteFile valida symlinks + path-traversal y crea el dirname.
       await safeWriteFile(file.dst, content);
       drawProgress(label, i + 1, files.length);
@@ -125,6 +137,11 @@ export async function ensureBootstrap(adapter) {
     return false;
   }
 
-  await bootstrap(missing);
+  await bootstrap(missing, adapter);
   return true;
+}
+
+// Helper para "agent" → "Agent" (capitalize first letter).
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
