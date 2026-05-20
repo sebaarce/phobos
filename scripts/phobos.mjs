@@ -33,7 +33,7 @@ import { tuiSelect } from './lib/tui.mjs';
 import { ensureBootstrap } from './lib/bootstrap.mjs';
 import { scanForUpdates, actionUpdateAgents } from './lib/update.mjs';
 import { actionSetModels, actionViewModels } from './lib/models.mjs';
-import { actionInstallTools } from './lib/tools.mjs';
+import { actionInstallTools, actionCodeGraph, detectCodeGraphStatus } from './lib/tools.mjs';
 import { runChild } from './lib/child.mjs';
 import { actionMemory } from './lib/memory/index.mjs';
 import { detectQdrantStatus } from './lib/memory/engine.mjs';
@@ -78,11 +78,33 @@ function renderMainMenuHeader(agentDir, installState) {
     memoryStatus = green('✓ instalado');
   }
 
+  // CodeGraph status — paralelo a Memory en el header.
+  let codeGraphStatus;
+  const cg = installState.codeGraph || {};
+  if (!cg.pkgInstalled) {
+    codeGraphStatus = dim('— no instalado');
+  } else if (!cg.dbBuilt) {
+    codeGraphStatus = yellow('⚠ paquete instalado · falta indexar');
+  } else {
+    // dbBuilt: mostrar size + frescura del índice.
+    const sizeLabel = cg.sizeMB != null ? ` · DB ${cg.sizeMB} MB` : '';
+    let freshness = '';
+    if (cg.lastIndexedAt) {
+      const ageMs = Date.now() - cg.lastIndexedAt.getTime();
+      const ageH = ageMs / (1000 * 60 * 60);
+      if (ageH < 24)       freshness = '  ·  ' + green('indexado hace < 1 día');
+      else if (ageH < 168) freshness = '  ·  ' + dim(`indexado hace ${Math.round(ageH / 24)} días`);
+      else                 freshness = '  ·  ' + yellow(`indexado hace ${Math.round(ageH / 24)} días`);
+    }
+    codeGraphStatus = green('✓ instalado') + dim(sizeLabel) + freshness;
+  }
+
   console.log('  ' + dim('Proyecto:') + ' ' + cyan(projectName));
   for (const line of ideLines) console.log(line);
   console.log('  ' + dim('Vault:   ') + vaultStatus
     + dim('  ·  templates (' + installState.activeIDE + '): ') + updatesStatus);
   console.log('  ' + dim('Memory:  ') + memoryStatus);
+  console.log('  ' + dim('CodeGraph: ') + codeGraphStatus);
   console.log('');
 }
 
@@ -131,6 +153,14 @@ async function getMainMenuState(agentDir, adapter) {
     }
   }
 
+  // CodeGraph: chequeo barato (file existence + stat), no invoca el binario.
+  let codeGraph = null;
+  try {
+    codeGraph = await detectCodeGraphStatus();
+  } catch {
+    codeGraph = { pkgInstalled: false, dbBuilt: false };
+  }
+
   return {
     installedIDEs,
     activeIDE: adapter.displayName,
@@ -138,6 +168,7 @@ async function getMainMenuState(agentDir, adapter) {
     pendingUpdates,
     memoryInstalled,
     qdrantRunning,
+    codeGraph,
   };
 }
 
@@ -153,6 +184,17 @@ async function runMainMenu(agentDir, adapter) {
     const memoryLabel = state.memoryInstalled
       ? 'Memory (RAG)            ' + dim('(instalado · reindex / reset / re-instalar)')
       : 'Memory (RAG)            ' + dim('(instalar engine de búsqueda semántica)');
+
+    // CodeGraph label — paralelo a Memory.
+    const cg = state.codeGraph || {};
+    let codeGraphLabel;
+    if (!cg.pkgInstalled) {
+      codeGraphLabel = 'CodeGraph               ' + dim('(instalar índice semántico del código)');
+    } else if (!cg.dbBuilt) {
+      codeGraphLabel = 'CodeGraph               ' + dim('(paquete instalado · falta indexar)');
+    } else {
+      codeGraphLabel = 'CodeGraph               ' + dim('(instalado · re-indexar / re-instalar)');
+    }
 
     // "Instalar Phobos para..." — entry point del wizard. Lista todos los IDE
     // soportados, marca cuáles ya están instalados, y permite agregar soporte
@@ -181,6 +223,7 @@ async function runMainMenu(agentDir, adapter) {
           'Setear modelos de agentes',
           'Instalar herramientas',
           memoryLabel,
+          codeGraphLabel,
           tuiLabel,
           dim('Salir'),
         ],
@@ -207,6 +250,8 @@ async function runMainMenu(agentDir, adapter) {
     } else if (index === 5) {
       await runAction(() => actionMemory(adapter));
     } else if (index === 6) {
+      await runAction(() => actionCodeGraph(adapter));
+    } else if (index === 7) {
       // Abrir TUI — al volver del child (TUI cerrada) salimos del wizard:
       // el usuario ya consumió la sesión, no tiene sentido reaparecer el menú.
       const launched = await actionOpenTUI(adapter);
@@ -216,7 +261,7 @@ async function runMainMenu(agentDir, adapter) {
         return;
       }
       // launched=false → el usuario canceló el sub-prompt de "qué TUI" — volvemos al menú.
-    } else if (index === 7) {
+    } else if (index === 8) {
       clearScreen();
       showHappyGoodbye();
       finalizeAndExit(0);

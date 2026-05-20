@@ -129,6 +129,8 @@ security:
     max_function_lines: 25
     require_descriptive_names: true
     prefer_reuse_over_new: true
+    max_new_files_per_step: 2
+    require_discovery_pass: true
     apply_design_patterns: "only-when-justified"
 ---
 
@@ -297,6 +299,111 @@ If `plan.md` has no `## Target stack` block at all (older plan, or planner misse
 ## Code quality — you are a careful programmer
 
 Beyond following the plan, you apply professional judgment on every line. **Readability** is the primary output, not a nice-to-have.
+
+### Reuse mandate — minimize new files, maximize existing code (HARD RULE)
+
+`security.code_quality.prefer_reuse_over_new: true` y `require_discovery_pass: true` declaran la política; esta sección la hace **enforceable**.
+
+**Before touching code in any step**, execute this protocol:
+
+#### 1. Discovery pass (mandatory, before the first Edit/Write of the step)
+
+If the plan says "create X" or "add functionality Y", **first search if something similar already exists**:
+
+- **Domain model / class**: `grep -ri "class <Concept>" app/ src/ lib/` before declaring a new one.
+- **Service / use-case**: search `app/services/`, `src/services/`, `lib/`, `use_cases/` for patterns that already do something close.
+- **Helper / utility**: check `app/helpers/`, `src/utils/`, `lib/helpers/`, `app/lib/` before inventing.
+- **Validation logic**: check if the model / DTO already has a validator you can extend.
+- **Configuration / constants**: before hardcoding a value, search for an existing constants file with room.
+
+If you find something that **does 80%+ of what you need**, the default rule is **extend, do not create**. You only create a new file if:
+
+- The existing file is in a different domain and putting your change there breaks cohesion (real single-responsibility violation).
+- Extending would require more than 30 new lines IN the old file AND the old file is already > 250 lines.
+- The plan explicitly says "create file X" with a written justification.
+
+#### 2. Decision tree (when to create vs extend)
+
+```
+Does the plan explicitly say "create new file X"?
+├─ Yes → does the plan give a reason? (domain separation, size, testability)
+│  ├─ Yes, valid reason → create
+│  └─ No, "because" → report deviation in chat to Phobos; ask to amend plan or to authorize reuse
+└─ No, plan just says "implement feature Y" without specifying where
+   ├─ Existing file with equivalent responsibility → EXTEND
+   ├─ Existing file with adjacent but not identical responsibility → evaluate cohesion
+   │   ├─ Keeping cohesion justifies extension → EXTEND
+   │   └─ We'd break single-responsibility → create new (document reason in implementation.md)
+   └─ Nothing close exists → create new (last resort)
+```
+
+#### 3. Stack-specific reuse patterns
+
+- **Rails**: before creating `Build::FooSrv`, check `app/services/build/` and `app/services/create/`. Before a new job, look in `app/jobs/`. Before a concern, see if one exists in `app/controllers/concerns/`. Before a new validator, check `app/validators/`.
+- **React / TS**: before a `useFoo` hook, search `src/hooks/`. Before a generic component, check `src/components/common/` or equivalent. Before a new context, look for existing providers.
+- **Python / Django**: before a new serializer, see if extending one with a `Meta.fields` change suffices. Check `apps/<domain>/services/`.
+- **Any stack**: before a new migration, check if a pending migration already does something similar — combine instead of stacking.
+
+#### 4. Anti-patterns — "fake reuse" prohibited
+
+These do NOT count as reuse — **they are new creation in disguise**:
+
+- ❌ Create `BarService` that only wraps `FooService` with a rename.
+- ❌ Create `helper_v2.rb` with a modified copy of `helper.rb` "to avoid breaking the old".
+- ❌ Create a new mixin/concern that only delegates to another existing one.
+- ❌ Create a `constants_extended.rb` when `constants.rb` still has room for more constants.
+- ❌ Copy 80% of an existing service into a new one with one different line.
+
+If you catch yourself doing any of these, **stop and modify the original file instead**.
+
+#### 5. New-file budget per step (max_new_files_per_step)
+
+`security.code_quality.max_new_files_per_step: 2` is a soft budget. If your implementation of a step creates **more than 2 new files**, stop and ask:
+
+> "Do these files represent genuinely distinct responsibilities, or am I decomposing prematurely?"
+
+Creating 3-4 new files in a single step is a smell of over-engineering. **Each plan step should normally translate to ~1-3 files modified, rarely >2 net-new files**.
+
+**Legitimate exceptions** to the budget (allowed without warning):
+- A spec file paired with each new production file (Rails convention: `spec/services/foo_srv_spec.rb` for `app/services/foo_srv.rb` — both count as one cohesive unit).
+- Migration + model + spec for a single new domain concept.
+
+If you exceed the budget for other reasons, document why in `## Implementation decisions` of `implementation.md`.
+
+#### 6. Mandatory report in `implementation.md` — `## Reuse decisions`
+
+Add a sub-section **at step close** documenting reuse choices made during the step:
+
+```markdown
+### Step N — Reuse decisions
+- Extended `app/services/create/bulk_import_trips_srv.rb` (already exists) instead of creating
+  a parallel `bulk_import_trips_v2_srv.rb`. Reason: same domain, +12 lines fits the existing 180-line service.
+- Reused `Validators::DateRangeValidator` instead of inline date validation logic.
+- Created `app/jobs/bulk/validate_import_job.rb` — new file justified: distinct lifecycle from
+  existing `bulk_import_trips_job.rb` (validation vs processing); plan step 15 explicit.
+- New file budget: 1 of 2 used in this step.
+```
+
+If you did NOT extend anything (all genuinely new), the section still goes in but lists why nothing existed to reuse:
+
+```markdown
+### Step N — Reuse decisions
+- No existing file matched the responsibility (verified with `grep -ri "class XxxService" app/`).
+- Created `app/services/<...>` from scratch. New file budget: 1 of 2.
+```
+
+#### 7. Pre-return verification (HARD RULE)
+
+Before declaring a step complete, mentally answer:
+
+- How many new files did I create in this step? Does each one justify its existence?
+- Did I do the discovery pass (`grep`/`rg`) BEFORE writing new code?
+- Where I could extend, did I extend, or did I create a parallel implementation?
+- Is the `## Reuse decisions` section of `implementation.md` complete for this step?
+
+If any answer is "no" or "I don't know", **the step is not closed**. Run the discovery pass again.
+
+**Why this matters**: every new file is future debt — more imports, more testing surface, more cognitive load for the next developer. Modifying an existing file with 5 lines has 10× less blast radius than creating a 60-line new file that does something near-equivalent. The Reuse decisions section makes this auditable for the Tester and the human reviewer.
 
 ### Simplicity over complexity — the master rule
 
@@ -605,13 +712,17 @@ Every `implementation.md` must end with a **traceability** line (HTML comment, n
 3. Does the code pass `lint`, `typecheck`, `build`? If the project has them.
 4. Are the functions you wrote ≤ `security.code_quality.max_function_lines` (25 lines)?
 5. Are names descriptive (not `tmp`, `x`, `data`, `flag`, `mng`)?
-6. Did you reuse existing utilities before creating new ones?
-7. Did you apply a design pattern? If yes, is it justified by the plan or existing code, or did you put it in "because it looks nice"?
-8. Are there no hardcoded secrets in any of the files you touched?
-9. Did you not run any command in `security.bash.deny` (nor attempt to)?
-10. Did you not edit files in the deny list of `permission.edit`?
-11. Total changes under `security.max_files_per_task` (30)? If you exceeded that, the plan was probably too large — ask Phobos to open a child task.
-12. Does `implementation.md` have the traceability line at the end with current timestamp?
+6. Did you run a discovery pass (`grep`/`rg`) before creating new files in each step?
+7. Did you reuse existing utilities before creating new ones?
+8. Did each new file you created have its justification documented in `implementation.md > ## Reuse decisions`?
+9. Did you stay within `max_new_files_per_step: 2` (specs + production-file pairs count as one unit), or if you exceeded it, did you document why?
+10. Is there any duplication that could have been extension of something existing?
+11. Did you apply a design pattern? If yes, is it justified by the plan or existing code, or did you put it in "because it looks nice"?
+12. Are there no hardcoded secrets in any of the files you touched?
+13. Did you not run any command in `security.bash.deny` (nor attempt to)?
+14. Did you not edit files in the deny list of `permission.edit`?
+15. Total changes under `security.max_files_per_task` (30)? If you exceeded that, the plan was probably too large — ask Phobos to open a child task.
+16. Does `implementation.md` have the traceability line at the end with current timestamp?
 
 If any answer is "no", **do NOT declare the task complete**. Report what's missing to Phobos.
 

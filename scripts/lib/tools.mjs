@@ -261,13 +261,29 @@ const CODEGRAPH_BIN_DISPLAY = `node ${CODEGRAPH_SHIM}`;
 
 // Detecta si CodeGraph ya está instalado y listo en este proyecto.
 // Devuelve un objeto con flags individuales para que la UI pueda mostrar
-// estado granular ("instalado pero sin indexar todavía").
+// estado granular ("instalado pero sin indexar todavía"). Si la DB existe,
+// también devuelve sizeMB y lastIndexedAt para que el header del menú
+// principal pueda mostrar "✓ instalado · DB X MB · indexado Y".
 export async function detectCodeGraphStatus() {
   const pkgInstalled = await fileExists(CODEGRAPH_PKG_MARKER);
   const projectInitialized = await fileExists('.codegraph');
   const shimReady = await fileExists('.codegraph/cg.cjs');
   const dbBuilt = await fileExists('.codegraph/codegraph.db');
-  return { pkgInstalled, projectInitialized, shimReady, dbBuilt };
+
+  let sizeMB = null;
+  let lastIndexedAt = null;
+  if (dbBuilt) {
+    try {
+      const { stat } = await import('node:fs/promises');
+      const s = await stat(join(cwd(), '.codegraph/codegraph.db'));
+      sizeMB = Math.round((s.size / (1024 * 1024)) * 10) / 10;
+      lastIndexedAt = s.mtime;
+    } catch {
+      // Si stat falla por permisos o race, dejamos los campos en null.
+    }
+  }
+
+  return { pkgInstalled, projectInitialized, shimReady, dbBuilt, sizeMB, lastIndexedAt };
 }
 
 // Asegura que `.codegraph/` esté listado en .gitignore. Idempotente — si
@@ -321,7 +337,9 @@ async function ensureCodeGraphHostManifest() {
 // `runChild` usa `shell: true`, así que esto funciona en ambas plataformas.
 
 export async function installCodeGraph() {
-  console.log('\n' + cyan('▸ ') + bold('Instalar CodeGraph (índice semántico del código, install aislado)'));
+  // Header neutral — esta función maneja install / re-index / re-install
+  // según el estado detectado, así que el título no asume "Instalar".
+  console.log('\n' + cyan('▸ ') + bold('CodeGraph — índice semántico del código (install aislado)'));
   console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  →  ' + CODEGRAPH_HOST_DIR + '/node_modules/'));
   console.log(dim('  fuente:  github.com/colbymchenry/codegraph'));
   console.log(dim('  qué hace: AST + grafo de relaciones; reduce ~94% los tool calls del researcher.'));
@@ -515,6 +533,14 @@ export async function installCodeGraph() {
   console.log('');
   console.log(dim('  Para borrar todo: ') + cyan(`rm -rf ${CODEGRAPH_HOST_DIR}/`) + dim('  (auto-ignored, no afecta nada más).'));
   console.log('');
+}
+
+// Router para la entrada "CodeGraph" del menú principal. Reusa installCodeGraph,
+// que ya es status-aware (decide install / re-index / re-install según estado).
+// `adapter` se acepta por simetría con otras acciones (actionMemory, etc.) —
+// CodeGraph en sí es IDE-agnostic, no usa el adapter.
+export async function actionCodeGraph(_adapter) {
+  return installCodeGraph();
 }
 
 // ═══════════════════════════════════════════════════════════════════
