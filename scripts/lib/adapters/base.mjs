@@ -72,7 +72,7 @@ export class IDEAdapter {
   /**
    * Subdirectorio bajo TEMPLATES_DIR donde viven los templates de agentes
    * para este IDE.
-   * @returns {string} ej: 'opencode/agent' | 'claude/agents'
+   * @returns {string} ej: 'agentes' (single source of truth — both IDEs reusan estos templates; Claude aplica transformAgent al frontmatter)
    */
   get templateAgentDir() {
     throw new Error(`${this.constructor.name} must override get templateAgentDir()`);

@@ -2,7 +2,7 @@
 //
 // Filosofía: SINGLE SOURCE OF TRUTH.
 // Los prompts de los agentes (el body markdown) son los mismos para ambos IDEs.
-// La verdad vive en `scripts/templates/opencode/agent/*.md` — Claude los reusa
+// La verdad vive en `scripts/templates/agentes/*.md` — Claude los reusa
 // vía un transformer que reescribe el YAML frontmatter al formato Claude Code.
 // Esto evita drift entre los dos targets cuando se actualizan los prompts.
 //
@@ -90,7 +90,7 @@ export class ClaudeAdapter extends IDEAdapter {
 
   // Los agentes los reusamos de OpenCode (single source of truth).
   // Los commands viven en claude/commands/ (escritos a mano).
-  get templateAgentDir() { return 'opencode/agent'; }
+  get templateAgentDir() { return 'agentes'; }
   get templateCommandDir() { return 'claude/commands'; }
 
   // ─── Archivos para bootstrap ───────────────────────────────────────
@@ -103,7 +103,7 @@ export class ClaudeAdapter extends IDEAdapter {
     // de frontmatter. El body queda idéntico.
     for (const agent of ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist']) {
       files.push({
-        src: `opencode/agent/${agent}.md`,
+        src: `agentes/${agent}.md`,
         dst: `.claude/agents/${agent}.md`,
         group: 'agentes',
         transform: 'agent',  // bootstrap llamará adapter.transformAgent(content)
@@ -154,12 +154,12 @@ export class ClaudeAdapter extends IDEAdapter {
     return [
       // Agentes — mismo single source. ignoreModel: true porque el usuario
       // customiza el modelo deliberadamente vía "Setear modelos".
-      { src: 'opencode/agent/phobos.md',     dst: '.claude/agents/phobos.md',     ignoreModel: true,  transform: 'agent' },
-      { src: 'opencode/agent/researcher.md', dst: '.claude/agents/researcher.md', ignoreModel: true,  transform: 'agent' },
-      { src: 'opencode/agent/planner.md',    dst: '.claude/agents/planner.md',    ignoreModel: true,  transform: 'agent' },
-      { src: 'opencode/agent/programmer.md', dst: '.claude/agents/programmer.md', ignoreModel: true,  transform: 'agent' },
-      { src: 'opencode/agent/tester.md',     dst: '.claude/agents/tester.md',     ignoreModel: true,  transform: 'agent' },
-      { src: 'opencode/agent/archivist.md',  dst: '.claude/agents/archivist.md',  ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/phobos.md',     dst: '.claude/agents/phobos.md',     ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/researcher.md', dst: '.claude/agents/researcher.md', ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/planner.md',    dst: '.claude/agents/planner.md',    ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/programmer.md', dst: '.claude/agents/programmer.md', ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/tester.md',     dst: '.claude/agents/tester.md',     ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/archivist.md',  dst: '.claude/agents/archivist.md',  ignoreModel: true,  transform: 'agent' },
       // Commands — templates propios.
       { src: 'claude/commands/adapt-agents.md',      dst: '.claude/commands/adapt-agents.md',      ignoreModel: false },
       { src: 'claude/commands/models-wizard.md',     dst: '.claude/commands/models-wizard.md',     ignoreModel: false },

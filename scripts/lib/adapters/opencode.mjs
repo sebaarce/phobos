@@ -46,7 +46,9 @@ export class OpencodeAdapter extends IDEAdapter {
 
   // ─── Paths del template source ─────────────────────────────────────
 
-  get templateAgentDir() { return 'opencode/agent'; }
+  // Agent templates viven en templates/agentes/ (single source of truth — Claude
+  // los reusa via transformAgent). Commands sí son OpenCode-specific.
+  get templateAgentDir() { return 'agentes'; }
   get templateCommandDir() { return 'opencode/command'; }
 
   // ─── Archivos para bootstrap ───────────────────────────────────────
@@ -60,7 +62,7 @@ export class OpencodeAdapter extends IDEAdapter {
     // Agentes
     for (const agent of ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist']) {
       files.push({
-        src: `opencode/agent/${agent}.md`,
+        src: `agentes/${agent}.md`,
         dst: `.opencode/agent/${agent}.md`,
         group: 'agentes',
       });
@@ -99,12 +101,12 @@ export class OpencodeAdapter extends IDEAdapter {
   trackedFiles() {
     return [
       // Agentes — ignoreModel: true porque el usuario customiza el campo `model:` deliberadamente.
-      { src: 'opencode/agent/phobos.md',     dst: '.opencode/agent/phobos.md',     ignoreModel: true },
-      { src: 'opencode/agent/researcher.md', dst: '.opencode/agent/researcher.md', ignoreModel: true },
-      { src: 'opencode/agent/planner.md',    dst: '.opencode/agent/planner.md',    ignoreModel: true },
-      { src: 'opencode/agent/programmer.md', dst: '.opencode/agent/programmer.md', ignoreModel: true },
-      { src: 'opencode/agent/tester.md',     dst: '.opencode/agent/tester.md',     ignoreModel: true },
-      { src: 'opencode/agent/archivist.md',  dst: '.opencode/agent/archivist.md',  ignoreModel: true },
+      { src: 'agentes/phobos.md',     dst: '.opencode/agent/phobos.md',     ignoreModel: true },
+      { src: 'agentes/researcher.md', dst: '.opencode/agent/researcher.md', ignoreModel: true },
+      { src: 'agentes/planner.md',    dst: '.opencode/agent/planner.md',    ignoreModel: true },
+      { src: 'agentes/programmer.md', dst: '.opencode/agent/programmer.md', ignoreModel: true },
+      { src: 'agentes/tester.md',     dst: '.opencode/agent/tester.md',     ignoreModel: true },
+      { src: 'agentes/archivist.md',  dst: '.opencode/agent/archivist.md',  ignoreModel: true },
       // Slash commands — no tienen `model:`, compare exact.
       { src: 'opencode/command/adapt-agents.md',      dst: '.opencode/command/adapt-agents.md',      ignoreModel: false },
       { src: 'opencode/command/models-wizard.md',     dst: '.opencode/command/models-wizard.md',     ignoreModel: false },
