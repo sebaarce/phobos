@@ -332,6 +332,25 @@ If you need real cryptographic integrity, that lives **outside the Planner scope
 6. Does the slug of the task folder match `security.slug_regex` (`^[a-zA-Z0-9_-]{3,60}$`)?
 7. Is the traceability line (`<!-- Traceability: ... -->`) at the end with current timestamp?
 8. Does the plan have at most **`security.max_plan_steps`** (15) steps? If it requires more, split it into sub-tasks and ask Phobos to open a child task for the part that does not fit.
+9. **If the plan touches DOM rendering, HTML templating, or string-to-DOM conversion**: did you flag the XSS surface for every user-controlled or API-supplied value that gets interpolated into HTML?
+
+   **Sinks to audit** (any of these in the plan triggers the check):
+   - Vanilla JS: `element.innerHTML = ...`, `document.write(...)`, `outerHTML = ...`, `insertAdjacentHTML(...)`
+   - Astro: raw `set:html={...}`, `Fragment` with template literals injected into the page
+   - React / Preact: `dangerouslySetInnerHTML={{ __html: ... }}`
+   - Vue: `v-html="..."`, `innerHTML`
+   - Svelte: `{@html ...}`
+   - Solid: `innerHTML`
+   - jQuery: `.html(...)`, `.append(htmlString)`
+   - Lit / template literals: ``` html`<div>${unsafeValue}</div>` ``` without lit's escaping
+   - Generic: any template string concatenated then assigned to `.innerHTML`
+
+   **What "flagged" looks like**:
+   - The step body specifies escaping: use `textContent` instead of `innerHTML`, use `DOMPurify.sanitize(html)`, use the framework's safe binding (React JSX auto-escapes, Vue `{{ }}` auto-escapes, Astro `{value}` auto-escapes — but NOT `set:html`).
+   - OR: the step says "values come from a trusted source (build-time constants, hardcoded strings, sanitized server output) — no escaping needed" with explicit justification.
+   - OR: a `## Risks / Rollback` entry: "XSS surface: `<file>:<selector>` renders `<field>` via `innerHTML` — escape before merging to main."
+
+   **If the plan does NONE of these for a sink it introduces**, the gate humano will reject (and you should catch it before sending).
 
 If any answer is "no", **do NOT return the plan**. Ask Phobos for more context or return a partial plan marking the problematic points.
 

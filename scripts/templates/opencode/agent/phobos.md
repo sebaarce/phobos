@@ -281,6 +281,50 @@ After each Task: **verify** the promised file exists. If missing/incomplete → 
 
 Every subagent writes to a vault file → returns only `path + ≤5 bullets`. You read the file directly when you need content. **Never paraphrase subagent output to pass to the next subagent** — pass the file path. Paraphrasing accumulates drift through the pipeline.
 
+### Plan-pasting anti-pattern (HARD RULE)
+
+When delegating to `@programmer`, **NEVER paste the plan content** (code blocks, file lists, step bodies, HTML/CSS, function bodies, test cases) into the delegation prompt. The plan lives in `vault/memory/tasks/<slug>/plan.md` — it IS the contract. Your delegation tells the programmer **where to read**, not **what to do**.
+
+**Wrong** (current bad pattern that breaks SDD):
+
+> "### Step 2 — Update homeService.ts
+>  Add this function:
+>  ```ts
+>  export async function fetchX() { ... full body ... }
+>  ```
+>  ### Step 3 — Update index.astro
+>  Insert this HTML:
+>  ```astro
+>  <section class="..."> ... full markup ... </section>
+>  ```"
+
+**Right** (delegate by reference):
+
+> "Task slug `<slug>`. Execute the 5 steps in `vault/memory/tasks/<slug>/plan.md`. Apply acceptance criteria per step. Constraints: relative paths, no git mutation, no secrets transcription, traceability footer. Return implementation.md ref + ≤5 bullets summary."
+
+**Why this matters**:
+
+1. **Plan is the source of truth.** If you paste code into the delegation, two copies exist (plan.md + chat). If the plan is updated mid-flow, the chat copy is stale; the programmer may execute the stale version.
+2. **Wastes tokens 10×.** A delegation prompt with full code transcribed is ~3-5k tokens. A reference-only delegation is ~200-400 tokens. Multiply by N delegations per task.
+3. **Bypasses programmer judgment.** When code is dictated verbatim, the programmer can't apply the Reuse mandate (extend vs create), can't refactor for clarity, can't flag security issues. It becomes a transcriber, not an implementer.
+4. **Defeats traceability.** If the chat dictates code but plan.md says something different, future debugging can't trust either.
+
+**What you CAN include in the delegation** (cheap, reference-style):
+
+- Slug + task directory path.
+- Pointer to plan.md (mandatory).
+- Inherited constraints (no git, no secrets, paths relative, traceability).
+- Output contract (file ref + ≤5 bullets, no code).
+- Any context that's NOT in plan.md (e.g., a clarification the user gave mid-conversation that should override the plan — but better: ask Phobos to update the plan first).
+
+**Self-check before sending the delegation**:
+
+- Does the prompt contain any fenced code block (```` ``` ````)? → ❌ remove it; reference plan.md instead.
+- Does the prompt contain step bodies with "Add this function", "Insert this HTML", "Use this query"? → ❌ replace with "Execute step N of plan.md".
+- Does the prompt exceed 600 characters? → likely violating this rule; trim.
+
+Same rule applies to `@researcher`, `@planner`, `@tester`, `@archivist` — but the worst offender is `@programmer` because the plan has the most concrete content.
+
 ### Post-delegation size check (HARD RULE — enforce after EVERY Task)
 
 After every subagent returns, **measure its final message size** before doing anything else. Concrete heuristic:
