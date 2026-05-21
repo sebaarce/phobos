@@ -335,7 +335,11 @@ export async function ensureUpdated(adapter) {
 
   // Antes de hacer cualquier cambio, ofrecer backup — solo de los archivos que van a cambiar
   // (outdated). Los inSync no se tocan; los missing no existen aún, no hay nada que respaldar.
+  // El backup va al folder específico del adapter (.opencode/agent_backup/ o .claude/agents_backup/).
   const filesToBackup = updates.outdated.map(f => f.dst);
+  const backupBase = adapter && typeof adapter.backupBaseDir === 'function'
+    ? adapter.backupBaseDir()
+    : undefined;
 
   if (filesToBackup.length > 0) {
     const names = filesToBackup.map(p => basename(p)).join(', ');
@@ -344,16 +348,16 @@ export async function ensureUpdated(adapter) {
       true,
     );
     if (wantsBackup) {
-      await backupAgents(filesToBackup);
+      await backupAgents(filesToBackup, backupBase);
     }
   } else {
     console.log(dim('\n  (sin archivos modificables — no se ofrece backup)'));
   }
 
   if (index === 0) {
-    await runUpdateWizard([], updates);
+    await runUpdateWizard([], updates, adapter);
   } else if (index === 1) {
-    await runUpdateAll(updates);
+    await runUpdateAll(updates, adapter);
   }
 }
 
@@ -422,9 +426,15 @@ export async function actionUpdateAgents(adapter) {
   history.push({ label: 'Estrategia', value: strategyLabel });
 
   // ─── Step 3/4: Backup previo ───────────────────────────────────────
+  // El backup va al folder específico del adapter (.opencode/agent_backup/
+  // para OpenCode, .claude/agents_backup/ para Claude). El display string del
+  // history refleja el path real, no hardcodea OpenCode.
   renderWizardStep(printUpdateBanner, history, '[3/4] Backup previo a la actualización');
 
   const filesToBackup = updates.outdated.map(f => f.dst);
+  const backupBase = typeof adapter.backupBaseDir === 'function'
+    ? adapter.backupBaseDir()
+    : undefined;
   let backupApplied = false;
 
   if (filesToBackup.length > 0) {
@@ -434,13 +444,13 @@ export async function actionUpdateAgents(adapter) {
       true,
     );
     if (wantsBackup) {
-      await backupAgents(filesToBackup);
+      await backupAgents(filesToBackup, backupBase);
       backupApplied = true;
     }
     history.push({
       label: 'Backup',
       value: backupApplied
-        ? `${filesToBackup.length} archivo${filesToBackup.length > 1 ? 's respaldados' : ' respaldado'} en .opencode/agent_backup/`
+        ? `${filesToBackup.length} archivo${filesToBackup.length > 1 ? 's respaldados' : ' respaldado'} en ${backupBase || '.opencode/agent_backup/phobos'}/`
         : 'Saltado por el usuario',
     });
   } else {

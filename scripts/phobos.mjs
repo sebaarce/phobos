@@ -238,7 +238,23 @@ async function runMainMenu(agentDir, adapter) {
     if (index === 0) {
       await runAction(() => actionInstallPhobos(adapter));
     } else if (index === 1) {
-      await runAction(() => actionUpdateAgents(adapter));
+      // Actualizar agentes — los templates de scripts/templates/agentes/ son
+      // single source of truth. Si tenés más de un IDE instalado, aplicamos
+      // la actualización a TODOS (sin preguntar) — es operación de mantenimiento
+      // y los IDEs comparten el mismo contenido (Claude aplica transformAgent
+      // sobre la marcha). Cada IDE escribe sus backups en su propia carpeta.
+      const targets = await detectAllInstalledAdapters();
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        if (targets.length > 1) {
+          clearScreen();
+          printHeader();
+          console.log('');
+          console.log('  ' + cyan('▸ ') + bold(`Actualizar agentes — ${t.displayName}  (${i + 1}/${targets.length})`));
+          console.log('');
+        }
+        await runAction(() => actionUpdateAgents(t));
+      }
     } else if (index === 2) {
       const target = await pickAdapterFor('Ver configuración de modelos', adapter);
       if (target) await runAction(() => actionViewModels(target));
