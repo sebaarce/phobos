@@ -31,7 +31,7 @@ import { printHeader, showHappyGoodbye, showSadGoodbye } from './lib/banners.mjs
 import { WIZARD_CANCELLED, finalizeAndExit, runAction } from './lib/exit.mjs';
 import { tuiSelect } from './lib/tui.mjs';
 import { ensureBootstrap } from './lib/bootstrap.mjs';
-import { scanForUpdates, actionUpdateAgents } from './lib/update.mjs';
+import { scanForUpdates, actionUpdateAgents, actionUpdateAgentsMultiIDE } from './lib/update.mjs';
 import { actionSetModels, actionViewModels } from './lib/models.mjs';
 import { actionInstallTools, actionCodeGraph, detectCodeGraphStatus } from './lib/tools.mjs';
 import { runChild } from './lib/child.mjs';
@@ -238,23 +238,11 @@ async function runMainMenu(agentDir, adapter) {
     if (index === 0) {
       await runAction(() => actionInstallPhobos(adapter));
     } else if (index === 1) {
-      // Actualizar agentes — los templates de scripts/templates/agentes/ son
-      // single source of truth. Si tenés más de un IDE instalado, aplicamos
-      // la actualización a TODOS (sin preguntar) — es operación de mantenimiento
-      // y los IDEs comparten el mismo contenido (Claude aplica transformAgent
-      // sobre la marcha). Cada IDE escribe sus backups en su propia carpeta.
+      // Actualizar agentes — el orchestrator multi-IDE muestra summary por
+      // cada IDE instalado (al día / X pendientes) y ofrece: aplicar pendientes,
+      // forzar resync (multi-select de IDEs), o saltar.
       const targets = await detectAllInstalledAdapters();
-      for (let i = 0; i < targets.length; i++) {
-        const t = targets[i];
-        if (targets.length > 1) {
-          clearScreen();
-          printHeader();
-          console.log('');
-          console.log('  ' + cyan('▸ ') + bold(`Actualizar agentes — ${t.displayName}  (${i + 1}/${targets.length})`));
-          console.log('');
-        }
-        await runAction(() => actionUpdateAgents(t));
-      }
+      await runAction(() => actionUpdateAgentsMultiIDE(targets));
     } else if (index === 2) {
       const target = await pickAdapterFor('Ver configuración de modelos', adapter);
       if (target) await runAction(() => actionViewModels(target));

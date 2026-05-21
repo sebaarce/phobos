@@ -6,7 +6,7 @@ import { TEMPLATES_DIR } from './runtime.mjs';
 import { fileExists, tryExec, safeWriteFile } from './fs-utils.mjs';
 import { green, yellow, red, cyan, dim, bold } from './colors.mjs';
 import { pad } from './colors.mjs';
-import { panel, tuiSelect, tuiYesNo } from './tui.mjs';
+import { panel, tuiSelect, tuiYesNo, tuiMultiSelect, clearScreen } from './tui.mjs';
 import { printUpdateBanner, renderWizardStep } from './banners.mjs';
 import { pressEnterToContinue } from './exit.mjs';
 
@@ -19,7 +19,10 @@ export function normalizeIgnoringModel(content) {
   return content.replace(/^model:\s*.+$/m, 'model: <PRESERVED>');
 }
 
-export async function scanForUpdates(adapter) {
+// `force=true` salta el chequeo de diff y trata TODOS los archivos trackeados
+// como outdated. Es el modo "resync" que el usuario invoca cuando hizo edits
+// locales que quiere descartar para volver al estado del template.
+export async function scanForUpdates(adapter, { force = false } = {}) {
   if (!adapter) {
     throw new Error('scanForUpdates requires an adapter (IDEAdapter instance).');
   }
@@ -34,6 +37,12 @@ export async function scanForUpdates(adapter) {
 
     if (!await fileExists(localPath)) {
       result.missing.push({ ...f, templatePath, localPath });
+      continue;
+    }
+
+    // Modo force: skip diff check, treat as outdated.
+    if (force) {
+      result.outdated.push({ ...f, templatePath, localPath });
       continue;
     }
 
@@ -361,15 +370,19 @@ export async function ensureUpdated(adapter) {
   }
 }
 
-export async function actionUpdateAgents(adapter) {
+// `force=true` activa modo resync — re-aplica todos los tracked files
+// aunque ya estén sincronizados. Útil para revertir edits locales.
+export async function actionUpdateAgents(adapter, { force = false } = {}) {
   if (!adapter) {
     throw new Error('actionUpdateAgents requires an adapter (IDEAdapter instance).');
   }
   const history = [];
 
   // ─── Step 1/4: Detectar archivos diferentes y faltantes ────────────
-  renderWizardStep(printUpdateBanner, history, '[1/4] Detectando estado de templates...');
-  const updates = await scanForUpdates(adapter);
+  renderWizardStep(printUpdateBanner, history, force
+    ? '[1/4] Resync — re-aplicando todos los archivos trackeados...'
+    : '[1/4] Detectando estado de templates...');
+  const updates = await scanForUpdates(adapter, { force });
   const totalOutdated = updates.outdated.length;
   const totalMissing = updates.missing.length;
   const totalInSync = updates.inSync.length;
@@ -397,33 +410,43 @@ export async function actionUpdateAgents(adapter) {
   }
 
   // ─── Step 2/4: Elegir estrategia ───────────────────────────────────
-  renderWizardStep(printUpdateBanner, history, '[2/4] Elegir estrategia de actualización');
+  // En modo force (resync) skip-eamos la pregunta "revisar uno por uno vs
+  // aplicar todas" — el user ya eligió "forzar resync" en el orchestrator,
+  // implica re-aplicar todo en bloque.
+  let strategyIndex;
+  if (force) {
+    strategyIndex = 1; // "Aplicar todas"
+    history.push({ label: 'Estrategia', value: 'Forzar resync (re-aplica todos los archivos)' });
+  } else {
+    renderWizardStep(printUpdateBanner, history, '[2/4] Elegir estrategia de actualización');
 
-  const detail = [
-    totalOutdated > 0 ? `${totalOutdated} ↻ diferente${totalOutdated > 1 ? 's' : ''}` : null,
-    totalMissing > 0 ? `${totalMissing} ⚠ faltante${totalMissing > 1 ? 's' : ''}` : null,
-  ].filter(Boolean).join(' + ');
+    const detail = [
+      totalOutdated > 0 ? `${totalOutdated} ↻ diferente${totalOutdated > 1 ? 's' : ''}` : null,
+      totalMissing > 0 ? `${totalMissing} ⚠ faltante${totalMissing > 1 ? 's' : ''}` : null,
+    ].filter(Boolean).join(' + ');
 
-  const { index } = await tuiSelect(
-    '\n¿Qué hacés con las actualizaciones?',
-    [
-      'Revisar uno por uno (Recomendado)',
-      `Aplicar todas las actualizaciones pendientes  ${dim('(' + detail + ', preserva mis modelos)')}`,
-      'Saltar — no actualizar nada',
-    ],
-    0,
-  );
+    const choice = await tuiSelect(
+      '\n¿Qué hacés con las actualizaciones?',
+      [
+        'Revisar uno por uno (Recomendado)',
+        `Aplicar todas las actualizaciones pendientes  ${dim('(' + detail + ', preserva mis modelos)')}`,
+        'Saltar — no actualizar nada',
+      ],
+      0,
+    );
+    strategyIndex = choice.index;
 
-  if (index === 2) {
-    history.push({ label: 'Estrategia', value: 'Saltar — sin cambios' });
-    renderWizardStep(printUpdateBanner, history, '');
-    console.log('  ' + dim('⊘ Actualización saltada.'));
-    await pressEnterToContinue();
-    return;
+    if (strategyIndex === 2) {
+      history.push({ label: 'Estrategia', value: 'Saltar — sin cambios' });
+      renderWizardStep(printUpdateBanner, history, '');
+      console.log('  ' + dim('⊘ Actualización saltada.'));
+      await pressEnterToContinue();
+      return;
+    }
+
+    const strategyLabel = strategyIndex === 0 ? 'Revisar uno por uno' : 'Aplicar todas (preserva modelos)';
+    history.push({ label: 'Estrategia', value: strategyLabel });
   }
-
-  const strategyLabel = index === 0 ? 'Revisar uno por uno' : 'Aplicar todas (preserva modelos)';
-  history.push({ label: 'Estrategia', value: strategyLabel });
 
   // ─── Step 3/4: Backup previo ───────────────────────────────────────
   // El backup va al folder específico del adapter (.opencode/agent_backup/
@@ -461,13 +484,17 @@ export async function actionUpdateAgents(adapter) {
   }
 
   // ─── Step 4/4: Aplicar cambios ─────────────────────────────────────
-  if (index === 0) {
+  if (strategyIndex === 0) {
     // Modo "Revisar uno por uno" — runUpdateWizard hace su propio renderWizardStep
     // por cada archivo y va agregando entries al history.
     await runUpdateWizard(history, updates, adapter);
   } else {
-    // Modo "Aplicar todas" — un solo render + ejecución en bloque
-    renderWizardStep(printUpdateBanner, history, '[4/4] Aplicar todas las actualizaciones');
+    // Modo "Aplicar todas" — un solo render + ejecución en bloque.
+    // En modo force, "todas" significa TODOS los tracked files (porque scan los
+    // metió todos en outdated). En modo normal, solo los pendientes reales.
+    renderWizardStep(printUpdateBanner, history, force
+      ? '[4/4] Aplicar resync — re-aplicando todos los archivos'
+      : '[4/4] Aplicar todas las actualizaciones');
     await runUpdateAll(updates, adapter);
     history.push({
       label: 'Aplicado',
@@ -479,4 +506,153 @@ export async function actionUpdateAgents(adapter) {
   renderWizardStep(printUpdateBanner, history, '');
   console.log('  ' + green('Wizard de actualización completado.'));
   await pressEnterToContinue();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Multi-IDE orchestrator — pre-flight summary + dispatch per adapter
+// ═══════════════════════════════════════════════════════════════════
+
+// Llama a scanForUpdates por cada IDE instalado. Devuelve un array con
+// `{ adapter, updates }` listo para renderizar el summary.
+async function getMultiIDEStatus(adapters) {
+  const out = [];
+  for (const adapter of adapters) {
+    const updates = await scanForUpdates(adapter);
+    out.push({ adapter, updates });
+  }
+  return out;
+}
+
+// Orchestrator de "Actualizar agentes" cuando hay 1 o más IDEs instalados.
+// Es el entry point que phobos.mjs llama desde el menú principal.
+//
+// Flow:
+//   1. Scan multi-IDE (cheap — solo lee archivos).
+//   2. Renderiza summary: cada IDE con su status (al día / X pendientes).
+//   3. Menú: aplicar pendientes / forzar resync (multi-select) / saltar.
+//   4. Dispatch a actionUpdateAgents por cada IDE elegido.
+export async function actionUpdateAgentsMultiIDE(adapters) {
+  if (!adapters || adapters.length === 0) {
+    console.log(dim('\n  No hay IDEs instalados para actualizar.'));
+    await pressEnterToContinue();
+    return;
+  }
+
+  // ─── Step 1: scan multi-IDE ────────────────────────────────────────
+  clearScreen();
+  printUpdateBanner();
+  console.log('');
+  console.log('  ' + cyan('▸ ') + bold('Detectando estado de templates en cada IDE...'));
+  console.log('');
+
+  const statuses = await getMultiIDEStatus(adapters);
+
+  // ─── Step 2: render summary ────────────────────────────────────────
+  const summaryLines = [];
+  let totalPending = 0;
+  for (const { adapter, updates } of statuses) {
+    const out = updates.outdated.length;
+    const miss = updates.missing.length;
+    const sync = updates.inSync.length;
+    totalPending += out + miss;
+
+    let status;
+    if (out === 0 && miss === 0) {
+      status = green(`✓ al día (${sync} archivo${sync !== 1 ? 's' : ''} sincronizados)`);
+    } else {
+      const parts = [];
+      if (out > 0) parts.push(yellow(`${out} ↻ diferente${out > 1 ? 's' : ''}`));
+      if (miss > 0) parts.push(yellow(`${miss} ⚠ faltante${miss > 1 ? 's' : ''}`));
+      status = parts.join(' + ') + dim(` (${sync} en sync)`);
+    }
+    summaryLines.push(cyan(' · ') + bold(adapter.displayName.padEnd(13)) + ' → ' + status);
+  }
+  panel('Estado por IDE', summaryLines);
+  console.log('');
+
+  // ─── Step 3: menu ──────────────────────────────────────────────────
+  const options = [];
+  const handlers = [];
+
+  if (totalPending > 0) {
+    options.push(`Aplicar updates pendientes  ${dim(`(${totalPending} archivo${totalPending > 1 ? 's' : ''} en total — solo IDEs con cambios)`)}`);
+    handlers.push('apply-pending');
+  }
+
+  options.push(`Forzar resync  ${dim('(re-aplica TODOS los archivos — elegís qué IDEs)')}`);
+  handlers.push('force-resync');
+
+  options.push(dim('Saltar — volver al menú'));
+  handlers.push('cancel');
+
+  let action;
+  try {
+    const choice = await tuiSelect('\n¿Qué querés hacer?', options, 0);
+    action = handlers[choice.index];
+  } catch {
+    return; // Esc = cancel
+  }
+
+  if (action === 'cancel') return;
+
+  // ─── Step 4: dispatch ──────────────────────────────────────────────
+  if (action === 'apply-pending') {
+    // Solo procesamos IDEs que tengan algo pendiente.
+    const toProcess = statuses.filter(s =>
+      s.updates.outdated.length + s.updates.missing.length > 0
+    );
+    for (let i = 0; i < toProcess.length; i++) {
+      const { adapter } = toProcess[i];
+      if (toProcess.length > 1) {
+        clearScreen();
+        printUpdateBanner();
+        console.log('  ' + cyan('▸ ') + bold(`Actualizar agentes — ${adapter.displayName}  (${i + 1}/${toProcess.length})`));
+        console.log('');
+      }
+      await actionUpdateAgents(adapter);
+    }
+    return;
+  }
+
+  if (action === 'force-resync') {
+    // Multi-select de IDEs (default: todos marcados).
+    let chosenIds;
+    if (adapters.length === 1) {
+      // Single-IDE: confirmamos sin multi-select.
+      const confirm = await tuiYesNo(
+        `\n¿Forzar resync de ${adapters[0].displayName}? ${dim('(re-aplica todos los archivos sobre los locales)')}`,
+        true,
+      );
+      if (!confirm) return;
+      chosenIds = [adapters[0].id];
+    } else {
+      console.log('');
+      console.log('  ' + bold('Forzar resync — ¿qué IDEs?'));
+      console.log(dim('  Espacio para marcar/desmarcar, Enter para confirmar.'));
+      const options = adapters.map(a => ({ label: a.displayName, value: a.id }));
+      const defaultChecked = adapters.map(a => a.id);
+      try {
+        chosenIds = await tuiMultiSelect('\nResync:', options, defaultChecked);
+      } catch {
+        return; // Esc
+      }
+      if (chosenIds.length === 0) {
+        console.log(dim('\n  ⊘ Nada seleccionado — cancelado.'));
+        await pressEnterToContinue();
+        return;
+      }
+    }
+
+    const toProcess = statuses.filter(s => chosenIds.includes(s.adapter.id));
+    for (let i = 0; i < toProcess.length; i++) {
+      const { adapter } = toProcess[i];
+      if (toProcess.length > 1) {
+        clearScreen();
+        printUpdateBanner();
+        console.log('  ' + cyan('▸ ') + bold(`Resync — ${adapter.displayName}  (${i + 1}/${toProcess.length})`));
+        console.log('');
+      }
+      await actionUpdateAgents(adapter, { force: true });
+    }
+  }
 }
