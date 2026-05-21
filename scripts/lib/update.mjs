@@ -376,12 +376,19 @@ export async function actionUpdateAgents(adapter, { force = false } = {}) {
   if (!adapter) {
     throw new Error('actionUpdateAgents requires an adapter (IDEAdapter instance).');
   }
-  const history = [];
+  // History arranca con qué IDE estamos actualizando — siempre visible arriba
+  // mientras navegás el wizard. Misma convención que el wizard de modelos.
+  const history = [
+    { label: 'IDE', value: `${adapter.displayName}  ·  ${adapter.agentDir}/` },
+  ];
+
+  // Sufijo `· <IDE>` para los step titles — refuerzo del contexto en cada paso.
+  const ideSuffix = '  ·  ' + adapter.displayName;
 
   // ─── Step 1/4: Detectar archivos diferentes y faltantes ────────────
-  renderWizardStep(printUpdateBanner, history, force
+  renderWizardStep(printUpdateBanner, history, (force
     ? '[1/4] Resync — re-aplicando todos los archivos trackeados...'
-    : '[1/4] Detectando estado de templates...');
+    : '[1/4] Detectando estado de templates...') + ideSuffix);
   const updates = await scanForUpdates(adapter, { force });
   const totalOutdated = updates.outdated.length;
   const totalMissing = updates.missing.length;
@@ -418,7 +425,7 @@ export async function actionUpdateAgents(adapter, { force = false } = {}) {
     strategyIndex = 1; // "Aplicar todas"
     history.push({ label: 'Estrategia', value: 'Forzar resync (re-aplica todos los archivos)' });
   } else {
-    renderWizardStep(printUpdateBanner, history, '[2/4] Elegir estrategia de actualización');
+    renderWizardStep(printUpdateBanner, history, '[2/4] Elegir estrategia de actualización' + ideSuffix);
 
     const detail = [
       totalOutdated > 0 ? `${totalOutdated} ↻ diferente${totalOutdated > 1 ? 's' : ''}` : null,
@@ -452,7 +459,7 @@ export async function actionUpdateAgents(adapter, { force = false } = {}) {
   // El backup va al folder específico del adapter (.opencode/agent_backup/
   // para OpenCode, .claude/agents_backup/ para Claude). El display string del
   // history refleja el path real, no hardcodea OpenCode.
-  renderWizardStep(printUpdateBanner, history, '[3/4] Backup previo a la actualización');
+  renderWizardStep(printUpdateBanner, history, '[3/4] Backup previo a la actualización' + ideSuffix);
 
   const filesToBackup = updates.outdated.map(f => f.dst);
   const backupBase = typeof adapter.backupBaseDir === 'function'
@@ -492,9 +499,9 @@ export async function actionUpdateAgents(adapter, { force = false } = {}) {
     // Modo "Aplicar todas" — un solo render + ejecución en bloque.
     // En modo force, "todas" significa TODOS los tracked files (porque scan los
     // metió todos en outdated). En modo normal, solo los pendientes reales.
-    renderWizardStep(printUpdateBanner, history, force
+    renderWizardStep(printUpdateBanner, history, (force
       ? '[4/4] Aplicar resync — re-aplicando todos los archivos'
-      : '[4/4] Aplicar todas las actualizaciones');
+      : '[4/4] Aplicar todas las actualizaciones') + ideSuffix);
     await runUpdateAll(updates, adapter);
     history.push({
       label: 'Aplicado',
