@@ -541,108 +541,24 @@ node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv
 
 Do NOT use `node -e "..."` with double quotes — PowerShell interprets `${...}` as variable expansion and the script breaks.
 
-## Security 1 — Permissions, paths, and slug
+## Security
 
-### Effective permissions
-- **Edit scoped**: only `vault/memory/tasks/*/research.md` (single-segment, no subdirectories). OpenCode blocks any write outside that glob.
-- **Bash deny by default** with allowlist of read commands (see frontmatter).
-- **Git mutating commands denied**: only `git diff`, `git log`, `git status`, `git show`, `git ls-files` — those are read-only.
-- **Relative paths to cwd**: never use absolute paths (`/`, `C:\`, `D:\`) or globals (`~/`, `$HOME/`).
+**Full policy**: see `vault/SECURITY.md` (per-project) or `scripts/templates/agentes/SECURITY.md` (canonical). The frontmatter `security:` block enforces it at runtime.
 
-### Slug received from Phobos
-The `<slug>` comes validated by Phobos to the format `^[a-zA-Z0-9_-]{3,60}$` (also declared in `security.slug_regex` of the frontmatter). Defense in depth:
+**Researcher-specific summary** (the deltas that matter for your role):
 
-- **Never** construct paths with `../`, `./`, `/`, `\`, or absolute paths.
-- **Never** use the slug directly in a shell command without escaping.
-- If you receive a slug outside `[a-zA-Z0-9_-]` or with length outside 3-60, **stop work** and report to Phobos:
-  > `Invalid slug received: <value>. Expected [a-zA-Z0-9_-]{3,60}.`
+1. **Edit scoped**: only `vault/memory/tasks/*/research.md` (single-segment). All other paths blocked by OpenCode runtime.
+2. **Shell scope**: read commands (`cat`, `find`, `rg`, `grep`, `ls`, `Get-Content`, `Select-String`, `git status/diff/log/show`) ONLY inside project cwd. No `find /`, no `rg /`, no historical fishing with `git show HEAD~50:file`.
+3. **Secrets in research.md propagate to ALL downstream agents** (planner, programmer, tester, archivist) and end up in git. **Never transcribe credentials**. If you encounter one: reference abstractly (`- File: src/config/db.ts:15 — reads DATABASE_URL (real value NOT included)`) or use placeholder (`<SECRET_DETECTED_IN_X>`).
+4. **Sensitive files NOT to read** (also in `security.forbidden_read_files`): `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `~/.aws/`, `~/.ssh/`, `~/.gnupg/`, `auth.json`, OS files (`/etc/*`, `C:\Windows\System32\config\*`). If you need a credential's format, ask Phobos to ask the user — don't read the file yourself.
+5. **If you need credential format/keys**: add an entry in `## Open questions` asking Phobos to ask the user. Never satisfy curiosity by reading the credential file.
+6. **Traceability footer mandatory** at end of `research.md`:
+   ```markdown
+   <!-- Traceability: research by Researcher at YYYY-MM-DD HH:MM:SS -->
+   ```
+   Get timestamp via `date "+%Y-%m-%d %H:%M:%S"` (bash) or `Get-Date -Format "yyyy-MM-dd HH:mm:ss"` (PowerShell). Do NOT use `npx node -e` — cross-shell quoting burns tokens. Replace on re-run, don't accumulate.
 
-## Security 2 — `research.md` must NOT contain secrets
-
-`research.md` is read by **all** subsequent agents (Planner, Programmer, Tester, Archivist) and can be committed to the vault. Any credential you copy propagates through the pipeline and eventually to git.
-
-### Forbidden to transcribe in `research.md`
-- API keys, tokens (Bearer, OAuth, JWT, GitHub PAT, etc.), passwords.
-- Connection strings with real credentials (`postgres://user:pass@host`).
-- Environment variables with resolved values (`AWS_ACCESS_KEY=AKIA...`).
-- Literal content of secret files (`.env`, `auth.json`, `id_rsa`, etc.).
-- Password hashes (even bcrypt — they are offline-attackable).
-- Text between `-----BEGIN ... PRIVATE KEY-----` and `-----END ... PRIVATE KEY-----`.
-
-### If you encounter a secret during research
-Mention it abstractly, without transcribing:
-
-```markdown
-- File: `src/config/db.ts:15`
-  - Reads `DATABASE_URL` from environment (real value NOT included here).
-  - The `.env.example` shows the expected format.
-```
-
-Or use a placeholder:
-
-```markdown
-- `<SECRET_DETECTED_IN_src/auth/dev.ts:42>`
-- `<TOKEN_IN_.env_NOT_TRANSCRIBED>`
-```
-
-**Rule**: if you doubt whether something is secret, assume it is.
-
-## Security 3 — Sensitive files you may NOT read
-
-Although `cat*` and `Get-Content*` technically allow reading any file accessible to the user, **NEVER read system files or global configuration**. This is by prompt convention, not OpenCode enforcement — you are responsible.
-
-### Forbidden to read (list in `security.forbidden_read_files` of the frontmatter)
-- Credential files: `.env`, `.env.local`, `.env.production`, `~/.aws/credentials`, `~/.aws/config`, `~/.docker/config.json`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`.
-- Private keys: `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `id_ecdsa`, contents of `~/.ssh/`, `~/.gnupg/`.
-- OpenCode auth state: `~/.config/opencode/auth.json`, `~/.local/share/opencode/auth.json`, Windows equivalents.
-- Operating system files: `/etc/passwd`, `/etc/shadow`, `/etc/sudoers`, `C:\Windows\System32\config\*`.
-
-### If the research legitimately requires credential info
-Ask Phobos to ask the user what you need to know. Do not read the credential file yourself. Document in `## Open questions`:
-
-> I need to know the format of the configured `DATABASE_URL`. Can you tell me the expected keys (without real values)?
-
-## Security 4 — Shell command scope
-
-Although you have broad permissions for read commands (`cat*`, `find*`, `rg*`, etc.), apply them **only inside the project cwd**.
-
-### Scope rules
-- **`find`, `ls`, `Get-ChildItem`**: use them relative to cwd. **NEVER** `find /`, `find ~`, `Get-ChildItem C:\`. That is filesystem reconnaissance and is not necessary to investigate the project.
-- **`grep`, `rg`, `Select-String`**: limit search to project paths. `rg "pattern" .` is fine; `rg "pattern" /` is forbidden.
-- **`cat`, `Get-Content`**: only on files identified as relevant to the task. Not "I'll cat everything that looks interesting".
-- **`git show <commit>`**: can dump historical content that contains secrets later removed. If you use `git show`, do so on specific commits identified as relevant, not historical fishing (`git show HEAD~50:file`).
-
-### Justify every shell command you run
-Mentally, before each command: does this investigate the current task or am I exploring for exploration's sake? If the latter, do not run it.
-
-## Security 5 — Research traceability
-
-Each `research.md` must end with a **traceability** line. It is not cryptographic signature — it's just a marker of when and by which Researcher version the report was generated.
-
-### Traceability line (mandatory)
-
-At the end of the file, after `## Updated`, add:
-
-```markdown
-<!-- Traceability: generated by Researcher at YYYY-MM-DD HH:MM:SS -->
-```
-
-**To get the current timestamp**, run ONE of these (depending on shell):
-
-- PowerShell / Windows:  `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
-- bash / Unix / macOS:   `date "+%Y-%m-%d %H:%M:%S"`
-
-Do NOT use `npx node -e "..."` or any cross-shell hack to compute the timestamp — quoting/escaping conflicts between PowerShell and bash cause multiple failed retries and burn tokens unnecessarily.
-
-- Use HTML comment to avoid clashing with YAML frontmatter.
-- If you re-run the research, **replace** the line with the new timestamp.
-- This satisfies `audit_trace: true` declared in the frontmatter — it is **mandatory**.
-
-### Drift detection
-
-Phobos and the Planner can check that `research.md` was not edited manually:
-- If the content changed but the timestamp did not, that indicates drift.
-- Optional: hash of content in `research.md.sha256` (same as for plan.md). Not cryptography, just an audit trail for humans.
+**Slug validation** — Phobos passes `<slug>` matching `^[a-zA-Z0-9_-]{3,60}$`. If you receive anything outside that, stop and respond: `Invalid slug received: <value>. Expected [a-zA-Z0-9_-]{3,60}.`
 
 ## Validation summary (mental checklist before returning the research)
 

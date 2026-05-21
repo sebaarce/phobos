@@ -145,6 +145,13 @@ export class ClaudeAdapter extends IDEAdapter {
       files.push({ src: v, dst: v, group: 'vault' });
     }
 
+    // SECURITY.md — política compartida (single source of truth para los 6 agentes).
+    files.push({
+      src: 'agentes/SECURITY.md',
+      dst: 'vault/SECURITY.md',
+      group: 'vault',
+    });
+
     return files;
   }
 
@@ -171,6 +178,8 @@ export class ClaudeAdapter extends IDEAdapter {
       // con cambios locales. El wizard de updates va a marcarla como diff
       // si el usuario tiene una versión más vieja del template.
       { src: 'claude/settings.json',                 dst: '.claude/settings.json',                 ignoreModel: false },
+      // SECURITY.md — política compartida; trackeada para detectar updates.
+      { src: 'agentes/SECURITY.md',                  dst: 'vault/SECURITY.md',                     ignoreModel: false },
     ];
   }
 

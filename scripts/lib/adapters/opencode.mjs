@@ -93,6 +93,15 @@ export class OpencodeAdapter extends IDEAdapter {
       files.push({ src: v, dst: v, group: 'vault' });
     }
 
+    // SECURITY.md — política de seguridad compartida. Cada agent prompt
+    // tiene un resumen corto + ref a este archivo. Lo copiamos a vault/
+    // para que humanos / agents puedan consultarlo desde el proyecto.
+    files.push({
+      src: 'agentes/SECURITY.md',
+      dst: 'vault/SECURITY.md',
+      group: 'vault',
+    });
+
     return files;
   }
 
@@ -113,6 +122,9 @@ export class OpencodeAdapter extends IDEAdapter {
       { src: 'opencode/command/reindex-memory.md',    dst: '.opencode/command/reindex-memory.md',    ignoreModel: false },
       { src: 'opencode/command/reindex-codegraph.md', dst: '.opencode/command/reindex-codegraph.md', ignoreModel: false },
       { src: 'opencode/command/list-memory.md',       dst: '.opencode/command/list-memory.md',       ignoreModel: false },
+      // SECURITY.md — política compartida; trackeada para que "Actualizar agentes"
+      // detecte updates al template y los aplique al proyecto.
+      { src: 'agentes/SECURITY.md',                   dst: 'vault/SECURITY.md',                      ignoreModel: false },
     ];
   }
 

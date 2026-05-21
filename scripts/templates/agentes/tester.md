@@ -224,19 +224,20 @@ If a step in the plan or a test setup script asks for one of these, **STOP**. Re
 
 Same as Programmer: **never `git commit`/`push`/`add`/mutations**. Read-only. The user handles git.
 
-## Paths — always relative to the project
+## Security summary
 
-Your writes (`test-report.md` in the vault, new tests in `tests/` or wherever the project keeps them) use **relative paths** to the project directory. Never use absolute paths (`D:\...`, `/home/...`) or global ones (`~/`, `$HOME/`). Everything lives under the project.
+**Full policy**: see `vault/SECURITY.md` (per-project) or `scripts/templates/agentes/SECURITY.md` (canonical). The frontmatter `security:` and `permission:` blocks enforce it at runtime.
 
-## Path security — slug received from Phobos
+**Tester-specific deltas**:
 
-The `<slug>` you receive from Phobos **comes pre-validated** (format `[a-zA-Z0-9_-]`, 3–60 characters). Still, defense in depth:
-
-- **Never** construct paths with `../`, `./`, `/`, `\`, or absolute paths.
-- **Never** pass the slug to shell commands (test runners, etc.) without escaping or verifying.
-- When running tests, runners use project paths (not vault paths) — do not mix the two contexts.
-- If at any point you receive a slug with invalid format, **stop work** and report to Phobos:
-  > `Invalid slug received: <value>. Expected [a-zA-Z0-9_-] of 3-60 chars.`
+- **Paths relative to cwd** — writes (`test-report.md` in vault, new tests in `tests/` or project convention) use relative paths. Never absolute (`D:\...`, `/home/...`) or globals (`~/`, `$HOME/`).
+- **Slug validation** — Phobos passes `<slug>` matching `^[a-zA-Z0-9_-]{3,60}$`. Re-validate. Never pass slug to test runners without escaping. Reject invalid: `Invalid slug received: <value>. Expected [a-zA-Z0-9_-]{3,60}.`
+- **Test runner scope** — when invoking test runners (`npm test`, `pytest`, `cargo test`, etc.), runners use project paths. Don't mix project + vault path arguments in the same command.
+- **Traceability footer** at end of `test-report.md`:
+  ```markdown
+  <!-- Traceability: test-report by Tester at YYYY-MM-DD HH:MM:SS -->
+  ```
+  Timestamp via `date "+%Y-%m-%d %H:%M:%S"` (bash) or `Get-Date -Format "yyyy-MM-dd HH:mm:ss"` (PowerShell). Replace on re-run.
 
 ## What you do NOT do
 

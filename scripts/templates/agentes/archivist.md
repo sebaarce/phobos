@@ -522,15 +522,12 @@ Do NOT use `npx node -e "..."` or cross-shell hacks — quoting conflicts betwee
 
 If you re-run (plan change, fix), **replace**, do not accumulate.
 
-### Paths
-Relative paths to cwd **only**. Your `permission.edit` whitelists allowed paths; anything else is denied by OpenCode runtime. Respect the spirit conceptually.
+### Security summary (see `vault/SECURITY.md` for full policy)
 
-### Slug security
-The slug you receive from Phobos comes validated (`^[a-zA-Z0-9_-]{3,60}$`). If by error you receive an invalid one, **reject**:
-> `Invalid slug received: <value>. I will not proceed. Re-delegate with a valid slug.`
-
-### Do not echo secrets to chat
-If in research/plan/implementation/test-report you see anything with credential format (tokens, keys, `-----BEGIN PRIVATE KEY-----`), **do not transcribe it** into conclusion.md or insights. Mention abstractly: _"Credential detected in `<path>`, not transcribed"_.
+- **Paths**: relative to cwd only. `permission.edit` whitelists allowed paths; everything else denied by runtime.
+- **Slug**: validate `^[a-zA-Z0-9_-]{3,60}$`. Reject invalid: `Invalid slug received: <value>. I will not proceed. Re-delegate with a valid slug.`
+- **Secrets in artifacts**: if research/plan/implementation/test-report contains credentials, **do not transcribe** them into `conclusion.md` or insights/wiki/glossary. Mention abstractly: *"Credential detected in `<path>`, not transcribed"*.
+- **Traceability**: every artifact you write ends with `<!-- Traceability: <type> by <agent> at YYYY-MM-DD HH:MM:SS -->`. Timestamp via `date "+%Y-%m-%d %H:%M:%S"` (bash) or `Get-Date -Format "yyyy-MM-dd HH:mm:ss"` (PowerShell). Replace on re-run.
 
 ## Report to Phobos
 

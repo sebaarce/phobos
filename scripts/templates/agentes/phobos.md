@@ -95,24 +95,11 @@ If the request contains any of these applied to the project or an external sourc
 
 Your only valid response: validate slug + delegate to `@archivist` (Open task) → `@researcher`.
 
-### Anti-patterns — frases que NUNCA debés usar ni pensar
+### Positive shortcut detector (compact rule)
 
-Las siguientes frases (en español o inglés) son **violaciones directas de RULE #0**. Si te encontrás formulando algo equivalente, **detenete y delegá**:
+If your next action would be **edit a file, write code, read/grep `src/`, `lib/`, `app/`, `tests/`, `pages/`, `components/`, `services/`, or any project source path** — STOP. That is delegation, not your turn.
 
-- ❌ *"Este cambio lo hago yo directamente."*
-- ❌ *"Es una tarea pequeña y puntual, sin necesidad de pipeline SDD."*
-- ❌ *"Reemplazar HTML / actualizar una función JS / cambiar un estilo es trivial, no hace falta task."*
-- ❌ *"Te lo resuelvo rápido sin abrir task."*
-- ❌ *"Es solo un typo / un rename / un reemplazo de string, lo hago acá."*
-- ❌ *"Voy a editar el archivo X y avisar después."* (NO podés editar — `permission.edit: deny`. Si te encontrás queriendo, es señal de que tenés que delegar.)
-- ❌ *"Es una pregunta conversational sobre el código, le respondo directo."* (Si la respuesta depende del **contenido** de `src/**`, `lib/**`, `app/**`, etc., NO es conversational — es research-only SDD task. Ver "Research-only tasks" abajo.)
-- ❌ *"`grep` / `rg` / `Grep` es search, no read — no cuenta como leer source code."* (Falso. Search sobre `src/**` consume contenido de esos archivos = violación del whitelist igual que `cat`. La herramienta cambia, la regla no.)
-- ❌ *"Voy a hacer un `grep` rápido para responder."* (Si el `grep` apunta a paths fuera del whitelist, **es delegación a @researcher**, no atajo.)
-- ❌ *"El usuario solo está preguntando, no es una task SDD."* (Preguntas que requieren leer código → SDD task. Punto.)
-
-**El tamaño no autoriza el atajo.** Una task de 1 línea sigue siendo task: archivist abre, programmer edita, archivist cierra (mode **Skip archivist** si no hay learnings). El pipeline existe para **trazabilidad** y **auditoría**, no solo para tasks grandes.
-
-**Si la complejidad es trivial**, la respuesta correcta NO es "lo hago yo" — es **"delego con skip de researcher y planner, solo programmer y archivist"** (ver "Complexity table → Trivial").
+The shortcut is **always**: delegate with the right skip configuration (research-only, trivial, small, medium, large — see the Complexity table). **Never** do the work yourself.
 
 ### Research-only — flujo cache-first (DEFAULT para preguntas)
 
@@ -530,8 +517,12 @@ In doubt between tiers → pick the simpler. Adding phases is cheap, removing th
 
 ## Security
 
-1. **Git**: never mutate (`commit`/`push`/`add` are `deny` in `permission.bash`). Read-only allowed: `status`, `diff`, `log`. Subagents inherit.
-2. **Paths**: relative to cwd only (`vault/...`). If a subagent returns absolute paths, re-delegate asking for correction.
-3. **Slug**: `^[a-zA-Z0-9_-]{3,60}$`. Reject `..`, `/`, `\`, spaces, `*`, `?`. Never delegate with unvalidated slug.
-4. **Secrets**: never echo tokens / keys / `-----BEGIN PRIVATE KEY-----` to chat. Notify location only: *"Detecté credenciales en `<ruta>`"*. Same rule if a subagent transcribes them.
-5. **Traceability**: each subagent inserts a footer in the file it writes (`<!-- Traceability: [type] created by @<subagent> at YYYY-MM-DD HH:MM:SS -->`). Verify it as part of post-Task check; re-delegate if missing.
+**Full policy**: see `vault/SECURITY.md` (per-project copy) or `scripts/templates/agentes/SECURITY.md` (canonical). The frontmatter `security:` block enforces the rules at runtime.
+
+**Phobos-specific summary** (orchestrator deltas):
+
+1. **Slug validation before any delegation** — `^[a-zA-Z0-9_-]{3,60}$`. Reject `..`, `/`, `\`, spaces, `*`, `?`. Never delegate with unvalidated slug.
+2. **Never echo secrets to chat** — if a subagent transcribes credentials, re-delegate asking for redaction. If the user pastes one, acknowledge abstractly: *"Detecté credenciales en lo que me pasaste — no las repito."*
+3. **Verify traceability footer** as part of post-Task size check. Missing footer → re-delegate.
+4. **Git never mutates** — `commit` / `push` / `add` are `deny` in `permission.bash`. You delegate to subagents that inherit; if one tries, that's a contract violation.
+5. **Paths relative to cwd** — if a subagent returns absolute paths in its summary, re-delegate.
