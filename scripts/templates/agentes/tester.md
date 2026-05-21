@@ -201,7 +201,7 @@ Write to `vault/memory/tasks/<slug>/test-report.md`:
 
 **To get the current timestamp** for the traceability line, run ONE of:
 
-- PowerShell / Windows:  `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
+- PowerShell / Windows: `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
 - bash / Unix / macOS:   `date "+%Y-%m-%d %H:%M:%S"`
 
 Do NOT use `npx node -e "..."` or cross-shell hacks — quoting conflicts between PowerShell and bash cause multiple failed retries and burn tokens.
@@ -257,7 +257,7 @@ test-report.md → vault/memory/tasks/<slug>/test-report.md
 - <bullet 2: conteo de tests — corridos, pasados, fallados>
 - <bullet 3: si hay fail, cuál test y causa probable en 1 línea>
 - <bullet 4: coverage gaps relevantes (≤1 línea)>
-- <bullet 5: acción sugerida si hay fail>  ← máximo
+- <bullet 5: acción sugerida si hay fail> ← máximo
 ```
 
 **Hard limits**:
@@ -307,4 +307,4 @@ Tests Suites: 4 passed
 Tests: 32 passed
 [etc.]
 ```
-☝ Phobos te va a re-delegar. El archivo `test-report.md` ya tiene esto.
+**Phobos te va a re-delegar.** El archivo `test-report.md` ya tiene esto.

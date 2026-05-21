@@ -226,7 +226,7 @@ plan.md → vault/memory/tasks/<slug>/plan.md
 - <stack objetivo si quedó claro>
 - <riesgos / blockers que el gate humano debería ver>
 - <skills sugeridos si aplican>
-- <observaciones para Phobos al expandir TodoList>  ← máximo 5 bullets
+- <observaciones para Phobos al expandir TodoList> ← máximo 5 bullets
 ```
 
 **Hard limits**:
@@ -271,4 +271,4 @@ He completado el plan. Acá están los pasos:
 - Los tests existentes en tests/auth.test.ts siguen pasando
 [continúa transcribiendo el archivo]
 ```
-☝ Eso es violación del contrato. Phobos te va a re-delegar.
+**Eso es violación del contrato.** Phobos te va a re-delegar.

@@ -217,7 +217,7 @@ Parse the JSON output (an array of `{score, filePath, sectionTitle, text}`). Use
 The Qdrant collection your project uses is **NOT** hardcoded in this prompt. It is configured per-project in:
 
 ```
-vault/memory/.engine/config.json  →  qdrant.collection
+vault/memory/.engine/config.json →  qdrant.collection
 ```
 
 `search.mjs` and `index-vault.mjs` read that field automatically — you don't need to know the collection name to use them. The binding is by **file path**: this prompt's project has its own `config.json`, and other projects have theirs, isolated.
@@ -259,9 +259,9 @@ You write to `vault/memory/tasks/<slug>/research.md` (Phobos passes you the slug
 > Retrieved via `vault/memory/.engine/search.mjs`. Only chunks with similarity ≥ 0.7.
 > Wikilinks point to the source notes in the vault.
 
-- **[[react-hook-form-zod]]** § Validation setup  _(similarity 0.842)_
+- **[[react-hook-form-zod]]** § Validation setup _(similarity 0.842)_
   > Use zod resolver with `react-hook-form` for type-safe forms. The `zodResolver` from `@hookform/resolvers/zod` wires validation errors automatically. Common pitfall: ...
-- **[[oauth-pkce]]** § Token rotation  _(similarity 0.781)_
+- **[[oauth-pkce]]** § Token rotation _(similarity 0.781)_
   > PKCE refresh flow requires the original `code_verifier`. Store it server-side, not in localStorage. ...
 
 _(If none above threshold, write: "_no matching insights above threshold 0.7._")_
@@ -587,7 +587,7 @@ research.md → vault/memory/tasks/<slug>/research.md
 - <bullet 2>
 - <bullet 3>
 - <bullet 4>
-- <bullet 5>  ← máximo
+- <bullet 5> ← máximo
 ```
 
 **Hard limits**:
@@ -635,4 +635,4 @@ The task is to implement JWT refresh token...
 - Framework: Express 4.18
 [continúa listando todo el research]
 ```
-☝ Esto es exactamente lo que NO tenés que hacer. Phobos va a re-delegar pidiendo que repitas en formato correcto.
+**Eso es exactamente lo que NO tenés que hacer.** Phobos va a re-delegar pidiendo que repitas en formato correcto.

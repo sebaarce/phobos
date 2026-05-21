@@ -482,7 +482,7 @@ Phobos te pasa: `query_slug` (archivo existente en `vault/memory/research-querie
    - Si `## Current` tiene otra task → moverla a `## Active` (igual que Mode 2).
    - En `## Current` poner:
      ```
-     - [[<task_slug>]] — <YYYY-MM-DD> — in_progress — <goal>  (promoted from query)
+     - [[<task_slug>]] — <YYYY-MM-DD> — in_progress — <goal> (promoted from query)
      ```
 
 7. **No tocar `research.md` body** más allá del footer. El contenido ya es válido — el researcher ya escribió un research bueno; el modo no re-investiga.
@@ -515,7 +515,7 @@ Every file you write or edit **replaces** the HTML comment line with the current
 
 **To get the current timestamp**, run ONE of:
 
-- PowerShell / Windows:  `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
+- PowerShell / Windows: `Get-Date -Format "yyyy-MM-dd HH:mm:ss"`
 - bash / Unix / macOS:   `date "+%Y-%m-%d %H:%M:%S"`
 
 Do NOT use `npx node -e "..."` or cross-shell hacks — quoting conflicts between PowerShell and bash cause multiple failed retries and burn tokens unnecessarily.

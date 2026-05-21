@@ -626,7 +626,7 @@ implementation.md → vault/memory/tasks/<slug>/implementation.md
 - <bullet 2: archivos tocados — solo conteo, NO listado>
 - <bullet 3: comandos clave corridos (build/test) y resultado>
 - <bullet 4: cualquier blocker / desvío del plan>
-- <bullet 5: nota para tester o para el gate de cierre>  ← máximo
+- <bullet 5: nota para tester o para el gate de cierre> ← máximo
 ```
 
 **Hard limits**:
@@ -686,4 +686,4 @@ PASS tests/auth.test.ts
   ✓ should rotate token (15 ms)
 [continúa el output de Jest]
 ```
-☝ Esto es exactamente la violación más cara del contrato. Phobos te va a re-delegar.
+**Eso es la violación más cara del contrato.** Phobos te va a re-delegar.
