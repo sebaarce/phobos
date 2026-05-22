@@ -828,12 +828,24 @@ export async function chooseMode(history, allModels, current, adapter = null) {
       console.log(headerBlock);
 
       // Sub-pregunta 1: ¿qué provider para este agente?
+      // Agregamos "Mantener actual" como última opción para que el user
+      // pueda saltar el config de UN agente sin tener que elegir provider+modelo
+      // (que es 2 clicks para terminar en el mismo modelo). Útil en custom mode
+      // cuando solo querés cambiar 2 de 6 agentes.
       let scopedModels = allModels;
+      let keptCurrent = false;
       if (hasMultipleProviders) {
         const providerOptions = detectedProviders.map(p => {
           const count = allModels.filter(m => getProvider(m) === p).length;
           return `${p} (${count} modelos)`;
         });
+        // "Mantener actual" — siempre como última opción.
+        const keepLabel = current[agent]
+          ? `Mantener actual ${dim('(' + current[agent] + ')')}`
+          : `Mantener actual ${dim('(sin modelo previo)')}`;
+        providerOptions.push(keepLabel);
+        const keepIdx = providerOptions.length - 1;
+
         // Default: provider del modelo actual del agente, si no, el sticky.
         const currentProviderForAgent = getProvider(current[agent] || '');
         let defaultIdx = detectedProviders.indexOf(currentProviderForAgent);
@@ -845,13 +857,23 @@ export async function chooseMode(history, allModels, current, adapter = null) {
           providerOptions,
           defaultIdx,
         );
-        const chosenProvider = detectedProviders[provIdx];
-        scopedModels = allModels.filter(m => getProvider(m) === chosenProvider);
-        stickyProvider = chosenProvider;
+
+        if (provIdx === keepIdx) {
+          // Usuario eligió "Mantener actual" — skip provider + model picker.
+          target[agent] = current[agent];
+          keptCurrent = true;
+        } else {
+          const chosenProvider = detectedProviders[provIdx];
+          scopedModels = allModels.filter(m => getProvider(m) === chosenProvider);
+          stickyProvider = chosenProvider;
+        }
       }
 
       // Sub-pregunta 2: ¿qué modelo dentro del provider elegido?
-      target[agent] = await pickFromList(scopedModels, `\nElegí modelo para @${agent}:`, current[agent]);
+      // Skip si el user ya eligió "Mantener actual" arriba.
+      if (!keptCurrent) {
+        target[agent] = await pickFromList(scopedModels, `\nElegí modelo para @${agent}:`, current[agent]);
+      }
     }
 
     // Resumen del provider final — refleja si quedó mono o mixto.
