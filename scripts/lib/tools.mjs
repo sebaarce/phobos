@@ -350,26 +350,42 @@ async function ensureCodeGraphInGitignore() {
 }
 
 // Flujo completo de install / re-index / re-install para CodeGraph (GLOBAL).
+//
+// El install se divide en dos partes:
+//   1. GLOBAL — siempre se hace, vive en ~/.phobos/codegraph/. Independiente
+//      del cwd. Acá va el paquete, node_modules y el shim. Se puede correr
+//      desde cualquier carpeta (no requiere proyecto válido).
+//   2. PER-PROJECT — solo se hace si el cwd parece un proyecto (.git, package.json,
+//      o AGENTS.md). Acá va el .codegraph/launcher.mjs, config y DB.
+//
+// Esto permite "instalar CodeGraph globalmente una vez" desde el home, y
+// después ir a cada proyecto y hacer solo la parte per-project.
 export async function installCodeGraph() {
   console.log('\n' + cyan('▸ ') + bold('CodeGraph — índice semántico del código (install global)'));
-  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  →  ' + CODEGRAPH_GLOBAL + '/node_modules/'));
+  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  →  ' + join(CODEGRAPH_GLOBAL, 'node_modules') + '/'));
   console.log(dim('  fuente:  github.com/colbymchenry/codegraph'));
   console.log(dim('  qué hace: AST + grafo de relaciones; reduce ~94% los tool calls del researcher.'));
-  console.log(dim('  ⚡ Instalación GLOBAL — el proyecto solo recibe .codegraph/launcher.mjs + DB.'));
+  console.log(dim('  ⚡ Binario GLOBAL — el proyecto solo recibe .codegraph/launcher.mjs + DB (si hay proyecto).'));
   console.log('');
 
-  // Prerequisitos básicos: estar en un proyecto razonable.
-  if (!await fileExists('.git') && !await fileExists('package.json') && !await fileExists('AGENTS.md')) {
-    console.log(yellow('  ✗ No parece un proyecto válido (sin .git, package.json o AGENTS.md).'));
-    console.log(dim('    Corré el wizard desde la raíz de un repo.'));
+  // Detectamos si el cwd parece un proyecto. Si NO, hacemos solo la parte
+  // global y avisamos al usuario. Esto NO bloquea — la parte global se
+  // puede instalar desde cualquier lado.
+  const inProject = await fileExists('.git')
+    || await fileExists('package.json')
+    || await fileExists('AGENTS.md');
+
+  if (!inProject) {
+    console.log(yellow('  ℹ Este directorio no parece un proyecto (sin .git, package.json o AGENTS.md).'));
+    console.log(dim('    Voy a hacer SOLO la instalación global. Para configurar CodeGraph en un'));
+    console.log(dim('    proyecto, andá a la raíz del repo y re-corré el wizard → CodeGraph.'));
     console.log('');
-    return;
   }
 
   const status = await detectCodeGraphStatus();
 
   // ─── Decisión rápida si ya está todo OK ────────────────────────────
-  if (status.pkgInstalled && status.shimReady && status.dbBuilt) {
+  if (status.pkgInstalled && status.shimReady && status.dbBuilt && inProject) {
     const { index } = await tuiSelect(
       'CodeGraph ya está instalado e indexado en este proyecto. ¿Qué hacer?',
       [
@@ -394,20 +410,24 @@ export async function installCodeGraph() {
       return;
     }
     // index === 1: continúa al flujo normal (reinstala el paquete global).
-  } else if (status.pkgInstalled && !status.dbBuilt) {
-    console.log(dim('  ℹ Paquete global instalado pero sin indexar todavía. Voy a inicializar + indexar.\n'));
+  } else if (status.pkgInstalled && !status.dbBuilt && inProject) {
+    console.log(dim('  ℹ Paquete global instalado pero sin indexar todavía. Voy a configurar el proyecto + indexar.\n'));
+  } else if (status.pkgInstalled && !inProject) {
+    console.log(dim('  ℹ Paquete global ya instalado. Sin proyecto activo, no hay más que hacer.\n'));
+    return;
   } else {
-    const confirm = await tuiYesNo(
-      '¿Instalar CodeGraph (global) y configurar este proyecto?',
-      true,
-    );
+    const promptMsg = inProject
+      ? '¿Instalar CodeGraph (global) y configurar este proyecto?'
+      : '¿Instalar CodeGraph globalmente (sin configurar ningún proyecto)?';
+    const confirm = await tuiYesNo(promptMsg, true);
     if (!confirm) {
       console.log(dim('  ⊘ saltado.\n'));
       return;
     }
   }
 
-  // ─── Step: Detectar legacy install en el proyecto ───────────────────
+  // ─── Step: Detectar legacy install en el proyecto (solo si hay proyecto) ────
+  if (inProject) {
   const legacy = await detectLegacyCodeGraphInstall(cwd());
   if (legacy.exists) {
     console.log(yellow('  ⚠ Detecté instalación legacy en ') + cyan(legacy.path) +
@@ -430,6 +450,7 @@ export async function installCodeGraph() {
       console.log(yellow('  Mantenido. El install global se hace igual; el legacy queda como peso muerto.'));
     }
   }
+  } // ← fin del if (inProject) para legacy detection
 
   // ─── Step: Storage location prompt ──────────────────────────────────
   console.log('');
@@ -489,69 +510,81 @@ export async function installCodeGraph() {
     console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado en ${CODEGRAPH_GLOBAL}/node_modules/\n`));
   }
 
-  // ─── Step: Generar shim global + launcher local ─────────────────────
+  // ─── Step: Generar shim global ──────────────────────────────────────
   await ensureCodeGraphShimGlobal();
   console.log(green('  ✓ ') + dim('Shim global regenerado: ') + cyan(CODEGRAPH_SHIM_GLOBAL));
 
-  await writeProjectCodeGraphLauncher();
-  console.log(green('  ✓ ') + dim('Launcher escrito en el proyecto: ') + cyan(CODEGRAPH_LAUNCHER_LOCAL));
+  // ─── Steps per-project (solo si estamos en un proyecto) ─────────────
+  if (inProject) {
+    await writeProjectCodeGraphLauncher();
+    console.log(green('  ✓ ') + dim('Launcher escrito en el proyecto: ') + cyan(CODEGRAPH_LAUNCHER_LOCAL));
 
-  // ─── Step: codegraph init (genera .codegraph/config.json) ────────────
-  if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
-    const initCode = await runChild(
-      'node', [CODEGRAPH_LAUNCHER_LOCAL, 'init'],
-      'Inicializar CodeGraph (.codegraph/config.json)',
+    // codegraph init (genera .codegraph/config.json)
+    if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
+      const initCode = await runChild(
+        'node', [CODEGRAPH_LAUNCHER_LOCAL, 'init'],
+        'Inicializar CodeGraph (.codegraph/config.json)',
+      );
+      if (initCode !== 0) {
+        console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Probá manualmente:`));
+        console.log(dim('    ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} init -i`));
+        console.log('');
+      } else {
+        console.log(green('\n  ✓ Config generada en .codegraph/\n'));
+      }
+    } else {
+      console.log(dim('  ℹ .codegraph/ ya tiene config — salteo init.\n'));
+    }
+
+    // .gitignore
+    const gi = await ensureCodeGraphInGitignore();
+    if (gi.added) {
+      console.log(green('  ✓ ') + dim('Actualicé ') + cyan('.gitignore') + dim(' (ignora .codegraph/ excepto launcher.mjs)'));
+    } else {
+      console.log(dim('  ℹ .codegraph/ ya estaba en .gitignore'));
+    }
+    console.log('');
+
+    // Indexación inicial
+    const wantIndex = await tuiYesNo(
+      '¿Correr indexación inicial ahora? (puede tardar varios minutos en repos grandes)',
+      true,
     );
-    if (initCode !== 0) {
-      console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Probá manualmente:`));
-      console.log(dim('    ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} init -i`));
-      console.log('');
+    if (wantIndex) {
+      const indexCode = await runChild('node', [CODEGRAPH_LAUNCHER_LOCAL, 'index'], 'Indexar el proyecto');
+      if (indexCode === 0) {
+        console.log(green('\n  ✓ Indexación inicial completa.'));
+      } else {
+        console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
+        console.log(dim('    Reintentá con: ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} index`));
+      }
     } else {
-      console.log(green('\n  ✓ Config generada en .codegraph/\n'));
+      console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
+      console.log(dim('    ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} index`));
     }
-  } else {
-    console.log(dim('  ℹ .codegraph/ ya tiene config — salteo init.\n'));
-  }
-
-  // ─── Step: .gitignore ───────────────────────────────────────────────
-  const gi = await ensureCodeGraphInGitignore();
-  if (gi.added) {
-    console.log(green('  ✓ ') + dim('Actualicé ') + cyan('.gitignore') + dim(' (ignora .codegraph/ excepto launcher.mjs)'));
-  } else {
-    console.log(dim('  ℹ .codegraph/ ya estaba en .gitignore'));
-  }
-  console.log('');
-
-  // ─── Step: Indexación inicial ───────────────────────────────────────
-  const wantIndex = await tuiYesNo(
-    '¿Correr indexación inicial ahora? (puede tardar varios minutos en repos grandes)',
-    true,
-  );
-  if (wantIndex) {
-    const indexCode = await runChild('node', [CODEGRAPH_LAUNCHER_LOCAL, 'index'], 'Indexar el proyecto');
-    if (indexCode === 0) {
-      console.log(green('\n  ✓ Indexación inicial completa.'));
-    } else {
-      console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
-      console.log(dim('    Reintentá con: ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} index`));
-    }
-  } else {
-    console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
-    console.log(dim('    ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} index`));
   }
 
   // ─── Resumen final ──────────────────────────────────────────────────
   console.log('');
   console.log(bold('  Layout:'));
   console.log(dim('    Global (compartido):  ') + cyan(CODEGRAPH_GLOBAL));
-  console.log(dim('    Proyecto (este repo): ') + cyan('.codegraph/launcher.mjs') + dim(' + .codegraph/config.json + .codegraph/codegraph.db'));
-  console.log('');
-  console.log(bold('  Próximos pasos:'));
-  console.log(dim('    · Probá una query:  ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} query "..."`));
-  console.log(dim('    · Tests afectados:  ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} affected <files>`));
-  console.log(dim('    · El @researcher detectará la instalación automáticamente.'));
-  console.log('');
-  console.log(dim('  Borrar todo lo del proyecto: ') + cyan(`rm -rf .codegraph/`) + dim('  (no afecta el global).'));
+  if (inProject) {
+    console.log(dim('    Proyecto (este repo): ') + cyan('.codegraph/launcher.mjs') + dim(' + .codegraph/config.json + .codegraph/codegraph.db'));
+    console.log('');
+    console.log(bold('  Próximos pasos:'));
+    console.log(dim('    · Probá una query:  ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} query "..."`));
+    console.log(dim('    · Tests afectados:  ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} affected <files>`));
+    console.log(dim('    · El @researcher detectará la instalación automáticamente.'));
+    console.log('');
+    console.log(dim('  Borrar todo lo del proyecto: ') + cyan(`rm -rf .codegraph/`) + dim('  (no afecta el global).'));
+  } else {
+    console.log(dim('    Proyecto: (no configurado — este directorio no es un proyecto)'));
+    console.log('');
+    console.log(bold('  Próximos pasos:'));
+    console.log(dim('    Andá a la raíz de un repo y corré:'));
+    console.log('    ' + cyan('npx github:sebaarce/phobos') + dim('  → CodeGraph'));
+    console.log(dim('    Eso crea ') + cyan('.codegraph/launcher.mjs') + dim(' y corre la indexación inicial.'));
+  }
 
   if (storage.mode === 'custom') {
     printVerificationCommands('CodeGraph', CODEGRAPH_GLOBAL, storage.basePath);
