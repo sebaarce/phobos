@@ -1,37 +1,24 @@
 // Detección + instalación de deps de Memory.
 //
-// Patrón: install AISLADO en vault/memory/.engine/ (no toca el proyecto host).
-// Esto permite que Memory funcione en cualquier stack — Rails, Python, Go,
-// Java — no solo en proyectos Node. Mismo patrón que .codegraph/cg.cjs.
+// Patrón nuevo (install GLOBAL): las deps viven en <base>/memory-engine/node_modules/
+// (donde <base> es ~/.phobos/ o un junction al disco elegido). El proyecto host
+// nunca tiene node_modules de Memory — solo config.json + launcher.mjs.
 //
-// La resolución de imports de los engine scripts (.mjs) sube buscando
-// node_modules/, así que find ahí mismo el isolated install sin shim extra.
-import { readFile } from 'node:fs/promises';
+// Esto fixea Vite/bundlers que se confundían con los node_modules anidados en
+// vault/memory/.engine/.
+
 import { join } from 'node:path';
-import { cwd, platform } from 'node:process';
-import { fileExists, tryExec, safeWriteFile } from '../fs-utils.mjs';
+import { platform } from 'node:process';
+import { fileExists, tryExec } from '../fs-utils.mjs';
 import { rl } from '../runtime.mjs';
 import { cyan, dim, bold, green, yellow, red } from '../colors.mjs';
 import { tuiSelect } from '../tui.mjs';
 import { runChild } from '../child.mjs';
-
-// Path del install aislado. Si esto cambia, también cambian las entradas en
-// MEMORY_ENGINE_FILES y los comandos sugeridos al usuario.
-export const MEMORY_ENGINE_DIR = 'vault/memory/.engine';
+import { MEMORY_ENGINE_GLOBAL } from '../globals.mjs';
 
 export function checkCommand(cmd) {
-  // Run with shell:true so PATH resolution works on Windows.
   const r = tryExec(platform === 'win32' ? `where ${cmd}` : `command -v ${cmd}`, 3000);
   return r.ok && r.out.trim().length > 0;
-}
-
-export async function readPackageJson() {
-  try {
-    const raw = await readFile(join(cwd(), 'package.json'), 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }
 
 export async function detectPackageManager() {
@@ -41,171 +28,76 @@ export async function detectPackageManager() {
   return 'npm';
 }
 
-// Detecta stacks que históricamente requieren --legacy-peer-deps con NPM v7+
-// (conflictos de peer dependencies habituales).
-export async function detectProblematicStack() {
-  const pkg = await readPackageJson();
-  if (!pkg) return [];
-  const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
-  const indicators = [
-    { stack: 'NestJS',       test: () => Object.keys(allDeps).some(k => k.startsWith('@nestjs/')) },
-    { stack: 'Angular',      test: () => Object.keys(allDeps).some(k => k.startsWith('@angular/')) },
-    { stack: 'Next.js',      test: () => 'next' in allDeps },
-    { stack: 'React Native', test: () => 'react-native' in allDeps },
-  ];
-  return indicators.filter(i => i.test()).map(i => i.stack);
-}
-
-// Lee el .npmrc del proyecto y devuelve true si tiene legacy-peer-deps habilitado.
-export async function checkNpmrcHasLegacyPeerDeps() {
-  try {
-    const content = await readFile(join(cwd(), '.npmrc'), 'utf-8');
-    return /^\s*legacy-peer-deps\s*=\s*true/im.test(content);
-  } catch {
-    return false;
-  }
-}
-
-// Persiste legacy-peer-deps=true en el .npmrc del proyecto (idempotente).
-export async function addLegacyPeerDepsToNpmrc() {
-  const npmrcPath = join(cwd(), '.npmrc');
-  let existing = '';
-  try {
-    existing = await readFile(npmrcPath, 'utf-8');
-  } catch {}
-  if (/^\s*legacy-peer-deps\s*=\s*true/im.test(existing)) {
-    return { added: false, reason: 'ya estaba' };
-  }
-  const snippet = '# Phobos Memory installer — NestJS/Angular peer-deps fix\nlegacy-peer-deps=true\n';
-  const content = existing.trim()
-    ? existing.trim() + '\n\n' + snippet
-    : snippet;
-  // .npmrc vive en cwd → safeWriteFile valida sandbox + rechaza symlinks.
-  await safeWriteFile('.npmrc', content);
-  return { added: true };
-}
-
-// Verifica si los paquetes de Memory están realmente presentes en node_modules.
-// Lo usamos como segunda señal después del install — pnpm/npm pueden retornar
-// exit code != 0 por warnings o por descargas parciales pero igual dejar los
-// paquetes utilizables. Chequeamos también onnxruntime-node porque algunos
-// package managers saltan optional deps y eso rompe el engine al runtime.
-//
-// Busca primero en el install AISLADO (vault/memory/.engine/node_modules/) y
-// fallback al node_modules/ del proyecto host (legacy install, para usuarios
-// que instalaron Memory antes del refactor a isolated). Retorna `location`
-// para que el caller sepa de dónde vienen las deps.
+// Verifica si los paquetes están presentes en el install GLOBAL.
+// El install legacy (en el proyecto) ya no se considera válido — el wizard
+// debería haberlo migrado en la detección de legacy.
 export async function verifyMemoryDepsInstalled() {
   const required = ['@xenova/transformers', '@qdrant/js-client-rest', 'onnxruntime-node'];
-
-  // Intento 1: install aislado (path preferido).
-  const isolatedMissing = [];
+  const missing = [];
   for (const dep of required) {
-    const pjPath = join(cwd(), MEMORY_ENGINE_DIR, 'node_modules', dep, 'package.json');
-    if (!await fileExists(pjPath)) isolatedMissing.push(dep);
+    const pjPath = join(MEMORY_ENGINE_GLOBAL, 'node_modules', dep, 'package.json');
+    if (!await fileExists(pjPath)) missing.push(dep);
   }
-  if (isolatedMissing.length === 0) {
-    return { ok: true, missing: [], location: 'isolated' };
-  }
-
-  // Intento 2: project root (legacy). Solo lo consideramos OK si están TODOS.
-  const projectMissing = [];
-  for (const dep of required) {
-    const pjPath = join(cwd(), 'node_modules', dep, 'package.json');
-    if (!await fileExists(pjPath)) projectMissing.push(dep);
-  }
-  if (projectMissing.length === 0) {
-    return { ok: true, missing: [], location: 'project' };
-  }
-
-  // Ninguno completo — reportamos los faltantes de la ubicación preferida (isolated).
-  return { ok: false, missing: isolatedMissing, location: null };
+  return {
+    ok: missing.length === 0,
+    missing,
+    location: missing.length === 0 ? 'global' : null,
+  };
 }
 
-// Ejecuta el comando de install hasta que tenga éxito o el usuario cancele.
-// Detecta errores comunes (ERESOLVE de NPM) y ofrece flags específicas
-// (--legacy-peer-deps, --force) en el menú de reintento.
-//
-// Install AISLADO: corre con cwd=vault/memory/.engine/ que tiene su propia
-// package.json + .npmrc. El proyecto host no se entera. Por eso ya NO recibimos
-// `depList` — las deps están en el package.json aislado, npm las resuelve solo.
-export async function installMemoryDepsWithRetry(pm, _depListUnused = null, initialFlags = []) {
-  let currentPm = pm;
+// Instala las deps del engine en <base>/memory-engine/. Siempre usa npm —
+// el .npmrc local del engine fuerza buena conducta (hoisted + legacy-peer-deps).
+export async function installMemoryDepsWithRetry(_pmIgnored = 'npm', _depListUnused = null, initialFlags = []) {
   let extraFlags = [...initialFlags];
-  // Toda la ejecución es relativa a este cwd. El proyecto host queda intacto.
-  const installCwd = join(cwd(), MEMORY_ENGINE_DIR);
 
   for (let attempt = 1; attempt <= 5; attempt++) {
     if (attempt > 1) {
       console.log('');
       const flagsStr = extraFlags.length ? ' ' + extraFlags.join(' ') : '';
-      console.log(dim(`  Reintento ${attempt - 1}/4 con ${currentPm}${flagsStr}...`));
+      console.log(dim(`  Reintento ${attempt - 1}/4 con npm${flagsStr}...`));
     }
 
-    // En instalación aislada usamos `install` sin lista de deps — npm/pnpm/yarn/bun
-    // leen las deps de package.json local. Esto evita parsearlas, y deja que
-    // cada PM use su flujo nativo de resolución.
     const args = ['install', ...extraFlags];
-    const label = `Instalar deps Memory aislado (${currentPm}${extraFlags.length ? ' ' + extraFlags.join(' ') : ''})`;
+    const label = `Instalar deps Memory global (npm${extraFlags.length ? ' ' + extraFlags.join(' ') : ''})`;
 
     rl.pause();
-    const exitCode = await runChild(currentPm, args, label, { cwd: installCwd });
+    const exitCode = await runChild('npm', args, label, { cwd: MEMORY_ENGINE_GLOBAL });
 
     const verify = await verifyMemoryDepsInstalled();
 
     if (verify.ok) {
       if (exitCode !== 0) {
         console.log('');
-        console.log(yellow(`  ⚠ ${currentPm} retornó exit code ${exitCode} pero los paquetes están en node_modules.`));
-        console.log(dim('    Probablemente warnings de subdependencias deprecadas o de scripts opcionales.'));
+        console.log(yellow(`  ⚠ npm retornó exit code ${exitCode} pero los paquetes están en node_modules.`));
+        console.log(dim('    Probablemente warnings de subdependencias deprecadas.'));
         console.log(dim('    Continuamos — los paquetes principales están utilizables.'));
       }
-      return { ok: true, exitCode, usedFlags: [...extraFlags], usedPm: currentPm };
+      return { ok: true, exitCode, usedFlags: [...extraFlags], usedPm: 'npm' };
     }
 
-    // Falló y faltan paquetes
     console.log('');
-    console.log(red(`  ✗ Faltan paquetes en node_modules: ${verify.missing.join(', ')}`));
-    console.log(dim('    Exit code de ' + currentPm + ': ' + exitCode));
+    console.log(red(`  ✗ Faltan paquetes en ${MEMORY_ENGINE_GLOBAL}/node_modules: ${verify.missing.join(', ')}`));
+    console.log(dim('    Exit code de npm: ' + exitCode));
     console.log('');
     console.log('  ' + bold('Causas comunes:'));
-    console.log('    ' + dim('· ') + yellow('Conflicto de peer dependencies (npm error ERESOLVE)') + dim(' — típico en proyectos NestJS/Angular.'));
-    console.log('    ' + dim('  Fix: usar ') + cyan('--legacy-peer-deps') + dim(' (NPM lo sugiere en su propio output).'));
     console.log('    ' + dim('· Red/firewall bloqueando descarga de binarios nativos (onnxruntime).'));
     console.log('    ' + dim('· Antivirus interceptando archivos durante la descarga.'));
-    console.log('    ' + dim('· Mirror de npm/pnpm temporal con problemas.'));
+    console.log('    ' + dim('· Mirror de npm temporal con problemas.'));
     console.log('    ' + dim('· Espacio en disco insuficiente (los paquetes pesan ~50-80 MB).'));
     console.log('');
 
-    // Opciones del menú dependen del package manager actual.
-    let options, handlers;
-    if (currentPm === 'npm') {
-      options = [
-        'Reintentar con npm ' + green('--legacy-peer-deps') + dim('  (recomendado para ERESOLVE)'),
-        'Reintentar con npm ' + yellow('--force') + dim('  (más agresivo, último recurso)'),
-        'Reintentar con npm (sin flags adicionales)',
-        'Cancelar instalación de Memory',
-      ];
-      handlers = [
-        () => { extraFlags = ['--legacy-peer-deps']; },
-        () => { extraFlags = ['--force']; },
-        () => { extraFlags = []; },
-        null, // cancel
-      ];
-    } else {
-      options = [
-        `Reintentar con ${currentPm} (sin cambios)`,
-        'Cambiar a npm + ' + green('--legacy-peer-deps') + dim('  (recomendado para ERESOLVE)'),
-        'Cambiar a npm (sin flags)',
-        'Cancelar instalación de Memory',
-      ];
-      handlers = [
-        () => { extraFlags = []; },
-        () => { currentPm = 'npm'; extraFlags = ['--legacy-peer-deps']; },
-        () => { currentPm = 'npm'; extraFlags = []; },
-        null,
-      ];
-    }
+    const options = [
+      'Reintentar con npm ' + green('--legacy-peer-deps'),
+      'Reintentar con npm ' + yellow('--force'),
+      'Reintentar con npm (sin flags adicionales)',
+      'Cancelar instalación de Memory',
+    ];
+    const handlers = [
+      () => { extraFlags = ['--legacy-peer-deps']; },
+      () => { extraFlags = ['--force']; },
+      () => { extraFlags = []; },
+      null,
+    ];
 
     const choice = await tuiSelect('\n¿Qué hacés?', options, 0);
     const handler = handlers[choice.index];

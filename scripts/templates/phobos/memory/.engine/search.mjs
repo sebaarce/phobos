@@ -1,27 +1,32 @@
 #!/usr/bin/env node
 // Semantic search CLI for the Researcher (and humans).
 //
-// Usage:
-//   node vault/memory/.engine/search.mjs "<query>" [--top 5] [--json]
+// El engine vive GLOBALMENTE en <base>/memory-engine/. Recibe el path
+// absoluto del proyecto vía --project para resolver el config.json local.
 //
-// Output (default human format):
-//   Markdown-friendly bullets with wikilinks to source notes.
+// Usage (vía launcher local — recomendado):
+//   node vault/memory/.engine/launcher.mjs search "<query>" [--top 5] [--json]
 //
-// Output (--json):
-//   JSON array suitable for downstream tools.
+// Usage (invocación directa del engine global):
+//   node ~/.phobos/memory-engine/search.mjs --project <abs-path> "<query>" [--top 5] [--json]
 
 import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { embed } from './embed.mjs';
 import { search, ping } from './qdrant-client.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
 
-async function loadConfig() {
-  return JSON.parse(await readFile(CONFIG_PATH, 'utf-8'));
+function parseProjectFlag(argv) {
+  const idx = argv.indexOf('--project');
+  if (idx >= 0 && argv[idx + 1]) {
+    const p = resolvePath(argv[idx + 1]);
+    argv.splice(idx, 2);
+    return p;
+  }
+  return null;
 }
 
 function parseArgs(argv) {
@@ -35,6 +40,10 @@ function parseArgs(argv) {
   return args;
 }
 
+async function loadConfig(configPath) {
+  return JSON.parse(await readFile(configPath, 'utf-8'));
+}
+
 function formatHuman(results) {
   if (results.length === 0) {
     return '_(no semantic matches above threshold)_';
@@ -42,11 +51,9 @@ function formatHuman(results) {
   const lines = [];
   for (const r of results) {
     const file = r.payload.filePath;
-    // Extract a slug-ish name for the wikilink: filename without extension.
     const base = file.split('/').pop().replace(/\.md$/, '');
     const section = r.payload.sectionTitle ? ` § ${r.payload.sectionTitle}` : '';
     lines.push(`- **[[${base}]]**${section}  _(similarity ${r.score.toFixed(3)})_`);
-    // Indented excerpt — keep it short, the consumer can read the file.
     const excerpt = r.payload.text.length > 280
       ? r.payload.text.slice(0, 280) + '…'
       : r.payload.text;
@@ -56,13 +63,18 @@ function formatHuman(results) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  // Project root: vía --project (engine global) o fallback __dirname (engine local legacy)
+  const projectRoot = parseProjectFlag(argv) || join(__dirname, '..', '..', '..');
+  const configPath = join(projectRoot, 'vault', 'memory', '.engine', 'config.json');
+
+  const args = parseArgs(argv);
   if (!args.query) {
-    console.error('Usage: node search.mjs "<query>" [--top N] [--json]');
+    console.error('Usage: search.mjs [--project <abs-path>] "<query>" [--top N] [--json]');
     process.exit(2);
   }
 
-  const config = await loadConfig();
+  const config = await loadConfig(configPath);
   const topK = args.top || config.search.topK;
   const threshold = config.search.similarityThreshold;
 
@@ -70,12 +82,11 @@ async function main() {
     if (args.json) {
       console.log(JSON.stringify({ error: 'qdrant unreachable', results: [] }));
     } else {
-      console.error('[memory] qdrant unreachable — start it with: docker compose -f docker-compose.qdrant.yml up -d');
+      console.error('[memory] qdrant unreachable — start it with: docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d');
     }
     process.exit(1);
   }
 
-  // e5 expects "query: " prefix at search time.
   const [vec] = await embed([`query: ${args.query}`], {
     model: config.model.name,
     pooling: config.model.pooling,

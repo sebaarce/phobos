@@ -3,13 +3,19 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cwd, platform } from 'node:process';
 import { rl } from './runtime.mjs';
-import { fileExists, rmrf, safeWriteFile } from './fs-utils.mjs';
+import { fileExists, rmrf, safeWriteFile, formatBytes } from './fs-utils.mjs';
 import { cyan, bold, dim, yellow, green, red } from './colors.mjs';
 import { tuiSelect, tuiMultiSelect, tuiYesNo, panel, clearScreen } from './tui.mjs';
 import { runChild } from './child.mjs';
 import { printToolsBanner, showHappyGoodbye } from './banners.mjs';
 import { finalizeAndExit, pressEnterToContinue } from './exit.mjs';
 import { detectPackageManager } from './memory/deps.mjs';
+import {
+  PHOBOS_HOME,
+  CODEGRAPH_GLOBAL,
+  detectLegacyCodeGraphInstall,
+} from './globals.mjs';
+import { promptStorageDisk, ensureLinkTo, printVerificationCommands } from './storage.mjs';
 
 export async function installObsidianSkills() {
   // Instalación per-proyecto vía Skills CLI (npx skills add).
@@ -29,7 +35,6 @@ export async function installObsidianSkills() {
     { id: 'defuddle',           desc: 'extraer markdown limpio de URLs' },
   ];
 
-  // Submenu: instalar todas o elegir
   const { index } = await tuiSelect(
     '¿Cuáles instalar?',
     [
@@ -77,11 +82,6 @@ export async function installObsidianSkills() {
 
 export async function installImpeccable(adapter) {
   // Impeccable — skill de diseño (pbakaus/impeccable).
-  // El repo upstream sigue un layout OpenCode-style (.opencode/skills/impeccable/...).
-  // Lo copiamos al primer skill dir del adapter (typically `.opencode/skills/` para
-  // OpenCode, `.claude/skills/` para Claude Code, etc.).
-
-  // Path destino: primer entry del skillDirs del adapter (local first).
   const skillDir = adapter && adapter.skillDirs && adapter.skillDirs[0]
     ? adapter.skillDirs[0]
     : '.opencode/skills';
@@ -119,10 +119,8 @@ export async function installImpeccable(adapter) {
     }
   }
 
-  // Asegurar que el skill dir exista
   await mkdir(skillDir, { recursive: true }).catch(() => {});
 
-  // Step 1: git clone shallow a tmp
   const tmpDir = '.tmp-impeccable-' + Date.now();
   const cloneCode = await runChild(
     'git',
@@ -134,10 +132,6 @@ export async function installImpeccable(adapter) {
     return;
   }
 
-  // Step 2: copiar .opencode/skills/impeccable/ del tmp al destino del adapter
-  // El layout del UPSTREAM (pbakaus/impeccable) es `.opencode/skills/impeccable/`,
-  // pero el destino lo decide el adapter actual. Para Claude Code va a
-  // `.claude/skills/impeccable/`, etc.
   const src = join(tmpDir, '.opencode', 'skills', 'impeccable');
   if (!await fileExists(src)) {
     console.log(yellow(`  ⚠ El repo clonado no tiene ${src}. Quizás el upstream cambió.\n`));
@@ -145,10 +139,8 @@ export async function installImpeccable(adapter) {
     return;
   }
 
-  // Borrar destino previo (si overwrite fue confirmado arriba)
   if (await fileExists(dest)) await rmrf(dest);
 
-  // Copia recursiva multiplataforma vía spawn
   const copyCmd = platform === 'win32'
     ? { cmd: 'xcopy', args: [src.replace(/\//g, '\\'), dest.replace(/\//g, '\\'), '/E', '/I', '/Y', '/Q'] }
     : { cmd: 'cp', args: ['-r', src, dest] };
@@ -169,44 +161,42 @@ export async function installImpeccable(adapter) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// CodeGraph — índice semántico AST + grafo de relaciones del código.
-// Per-project install (devDependency en package.json) — alineado con
-// el patrón que usa Memory para sus deps.
+// CodeGraph — install GLOBAL.
+//
+// Layout nuevo:
+//   <base>/codegraph/                  ← global, compartido entre proyectos
+//   ├── package.json                   ← manifest aislado
+//   ├── .npmrc                         ← ignore-workspace + flat
+//   ├── node_modules/                  ← @colbymchenry/codegraph
+//   └── cg.cjs                         ← shim de invocación (createRequire)
+//
+//   <project>/.codegraph/              ← per-project (chico)
+//   ├── launcher.mjs                   ← despacha al shim global con cwd=project
+//   ├── config.json                    ← creado por `codegraph init`
+//   └── codegraph.db                   ← creado por `codegraph index`
 // ═══════════════════════════════════════════════════════════════════
 
 const CODEGRAPH_PKG = '@colbymchenry/codegraph';
-// Install aislado para que NO entre al package.json del proyecto principal
-// (CI/CD no debería bajarlo nunca). Todo vive bajo .codegraph/:
-//   .codegraph/package.json              ← manifest aislado, propio
-//   .codegraph/node_modules/...          ← node_modules aislado
-//   .codegraph/node_modules/.bin/codegraph ← binario invocable
-//   .codegraph/codegraph.db              ← índice (también aislado)
-const CODEGRAPH_HOST_DIR = '.codegraph';
-const CODEGRAPH_PKG_MARKER = '.codegraph/node_modules/@colbymchenry/codegraph/package.json';
+const CODEGRAPH_PKG_MARKER = join(CODEGRAPH_GLOBAL, 'node_modules', '@colbymchenry', 'codegraph', 'package.json');
 
-// Path estable al shim que invoca CodeGraph. El shim se crea durante la
-// instalación y bypassea las diferencias entre package managers (pnpm en
-// isolated mode no siempre crea `.bin/codegraph`, npm/yarn sí, bun a veces).
-// Como NOSOTROS lo creamos, el path es estable y conocido para el agente.
-const CODEGRAPH_SHIM = '.codegraph/cg.cjs';
+// Shim global — vive con el install global. Usa createRequire para resolver
+// el bin del paquete sin asumir layout específico (flat npm vs hoisted pnpm).
+const CODEGRAPH_SHIM_GLOBAL = join(CODEGRAPH_GLOBAL, 'cg.cjs');
 
-// Crea el shim si no existe (o lo regenera con --force). Es un archivo CommonJS
-// que usa Node's createRequire para resolver el paquete vía algoritmo estándar
-// — así funciona con cualquier package manager: npm (flat), pnpm (symlinks o
-// hoisted), yarn (PnP o flat), bun. La resolución sigue node_modules/ y
-// .pnpm/ y links automáticamente, no asume una estructura fija.
-async function ensureCodeGraphShim({ force = false } = {}) {
-  if (!force && await fileExists(CODEGRAPH_SHIM)) return { created: false };
+// Per-project: launcher chico que despacha al shim global con cwd=project.
+const CODEGRAPH_LAUNCHER_LOCAL = '.codegraph/launcher.mjs';
 
-  const shim = `// Stable invocation shim for CodeGraph — generated by Phobos wizard.
+// Crea el shim GLOBAL (en <base>/codegraph/cg.cjs). Sobreescribe siempre.
+async function ensureCodeGraphShimGlobal() {
+  const shim = `// Stable invocation shim for CodeGraph — generated by Phobos.
+// Vive en ${CODEGRAPH_GLOBAL}/cg.cjs (instalación global).
+//
 // Uses Node's createRequire so the package resolves correctly regardless of
 // whether the package manager produced a flat node_modules (npm/yarn classic),
 // a symlinked layout (pnpm default), or PnP (yarn berry).
 const { createRequire } = require('node:module');
 const { join } = require('node:path');
 
-// Anclamos la resolución al package.json local de este host aislado. Node
-// camina hacia node_modules/ desde acá siguiendo su algoritmo estándar.
 const req = createRequire(join(__dirname, 'package.json'));
 
 let pkgPath;
@@ -214,7 +204,7 @@ try {
   pkgPath = req.resolve('@colbymchenry/codegraph/package.json');
 } catch (err) {
   console.error('[cg.cjs] No pude resolver @colbymchenry/codegraph desde', __dirname);
-  console.error('         Reinstalá con:  cd', __dirname, '&&  npm install   (o pnpm install --ignore-workspace)');
+  console.error('         Reinstalá con:  cd', __dirname, '&&  npm install');
   process.exit(1);
 }
 
@@ -232,42 +222,89 @@ if (!entry) {
 
 require(join(pkgPath, '..', entry));
 `;
-  await safeWriteFile(CODEGRAPH_SHIM, shim);
+  await mkdir(CODEGRAPH_GLOBAL, { recursive: true });
+  await safeWriteFile(CODEGRAPH_SHIM_GLOBAL, shim, { allowedRoot: PHOBOS_HOME });
+}
+
+// Crea el manifest global (<base>/codegraph/package.json).
+async function ensureCodeGraphHostManifestGlobal() {
+  const manifestPath = join(CODEGRAPH_GLOBAL, 'package.json');
+  await mkdir(CODEGRAPH_GLOBAL, { recursive: true });
+  if (await fileExists(manifestPath)) return { created: false };
+
+  const manifest = {
+    name: 'phobos-codegraph-host',
+    private: true,
+    version: '0.0.0',
+    description: 'Phobos global install of @colbymchenry/codegraph. Shared across projects via launcher.mjs in each .codegraph/.',
+    dependencies: {
+      [CODEGRAPH_PKG]: 'latest',
+    },
+  };
+  await safeWriteFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', { allowedRoot: PHOBOS_HOME });
   return { created: true };
 }
 
-// Crea un .npmrc local en .codegraph/ que fuerza buena conducta del pm:
-//   - ignore-workspace=true → si el proyecto principal tiene pnpm-workspace.yaml,
-//     pnpm igual instala localmente en .codegraph/ (no hoistea al root).
-//   - node-linker=hoisted → fuerza node_modules plano (npm-style) en pnpm.
-//   - shamefully-hoist=true → defensivo extra para pnpm legacy.
-async function ensureCodeGraphNpmrc() {
-  const npmrcPath = join(CODEGRAPH_HOST_DIR, '.npmrc');
+// Crea el .npmrc global (<base>/codegraph/.npmrc).
+async function ensureCodeGraphNpmrcGlobal() {
+  const npmrcPath = join(CODEGRAPH_GLOBAL, '.npmrc');
   if (await fileExists(npmrcPath)) return { created: false };
   const content = [
-    '# Phobos CodeGraph isolated install — fuerza layout flat y aislamiento del workspace.',
-    '# Sin esto, pnpm con workspaces hoistea o usa symlinks no-resolubles.',
+    '# Phobos CodeGraph global install — flat layout + workspace isolation.',
     'ignore-workspace=true',
     'node-linker=hoisted',
     'shamefully-hoist=true',
     '',
   ].join('\n');
-  await safeWriteFile(npmrcPath, content);
+  await safeWriteFile(npmrcPath, content, { allowedRoot: PHOBOS_HOME });
   return { created: true };
 }
 
-// Versión "user-friendly" del path para mostrar en mensajes.
-const CODEGRAPH_BIN_DISPLAY = `node ${CODEGRAPH_SHIM}`;
+// Escribe el launcher per-proyecto en .codegraph/launcher.mjs.
+async function writeProjectCodeGraphLauncher() {
+  await mkdir('.codegraph', { recursive: true });
+  const content = `#!/usr/bin/env node
+// Phobos CodeGraph launcher (per-project).
+//
+// Este archivo es chico a propósito — el binario + node_modules viven
+// globalmente en ~/.phobos/codegraph/. Acá solo despachamos con cwd=proyecto
+// para que codegraph lea .codegraph/config.json y escriba .codegraph/codegraph.db
+// localmente.
 
-// Detecta si CodeGraph ya está instalado y listo en este proyecto.
-// Devuelve un objeto con flags individuales para que la UI pueda mostrar
-// estado granular ("instalado pero sin indexar todavía"). Si la DB existe,
-// también devuelve sizeMB y lastIndexedAt para que el header del menú
-// principal pueda mostrar "✓ instalado · DB X MB · indexado Y".
+import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, '..');
+const CG_GLOBAL = join(homedir(), '.phobos', 'codegraph');
+const CG_SHIM = join(CG_GLOBAL, 'cg.cjs');
+
+if (!existsSync(CG_SHIM)) {
+  console.error(\`[phobos-codegraph] global no instalado en \${CG_GLOBAL}\`);
+  console.error('[phobos-codegraph]  reinstalá con: npx github:sebaarce/phobos → Tools → CodeGraph');
+  process.exit(1);
+}
+
+const result = spawn(process.execPath, [CG_SHIM, ...process.argv.slice(2)], {
+  cwd: PROJECT_ROOT,
+  stdio: 'inherit',
+});
+result.on('exit', code => process.exit(code ?? 1));
+`;
+  await safeWriteFile(CODEGRAPH_LAUNCHER_LOCAL, content);
+}
+
+// Versión "user-friendly" del path para mostrar en mensajes.
+const CODEGRAPH_BIN_DISPLAY = `node ${CODEGRAPH_LAUNCHER_LOCAL}`;
+
+// Detecta si CodeGraph ya está instalado global Y configurado en este proyecto.
 export async function detectCodeGraphStatus() {
   const pkgInstalled = await fileExists(CODEGRAPH_PKG_MARKER);
+  const launcherReady = await fileExists(CODEGRAPH_LAUNCHER_LOCAL);
   const projectInitialized = await fileExists('.codegraph');
-  const shimReady = await fileExists('.codegraph/cg.cjs');
   const dbBuilt = await fileExists('.codegraph/codegraph.db');
 
   let sizeMB = null;
@@ -278,16 +315,13 @@ export async function detectCodeGraphStatus() {
       const s = await stat(join(cwd(), '.codegraph/codegraph.db'));
       sizeMB = Math.round((s.size / (1024 * 1024)) * 10) / 10;
       lastIndexedAt = s.mtime;
-    } catch {
-      // Si stat falla por permisos o race, dejamos los campos en null.
-    }
+    } catch {}
   }
 
-  return { pkgInstalled, projectInitialized, shimReady, dbBuilt, sizeMB, lastIndexedAt };
+  return { pkgInstalled, projectInitialized, shimReady: launcherReady, dbBuilt, sizeMB, lastIndexedAt };
 }
 
-// Asegura que `.codegraph/` esté listado en .gitignore. Idempotente — si
-// ya está, no toca el archivo. Si no existe .gitignore, lo crea.
+// Asegura que `.codegraph/` esté listado en .gitignore.
 async function ensureCodeGraphInGitignore() {
   const path = '.gitignore';
   let existing = '';
@@ -295,11 +329,19 @@ async function ensureCodeGraphInGitignore() {
     existing = await readFile(join(cwd(), path), 'utf-8');
   } catch {}
 
-  // Match líneas que mencionen .codegraph/ o .codegraph (con o sin slash final).
   const alreadyListed = /^\s*\.codegraph\/?\s*$/m.test(existing);
   if (alreadyListed) return { added: false };
 
-  const snippet = '\n# CodeGraph — índice local del código (no commitear)\n.codegraph/\n';
+  // Estrategia nueva: ignoramos todo .codegraph/ EXCEPTO el launcher.mjs.
+  // El launcher es chico, generado, y debería viajar con el proyecto para
+  // que el agente lo invoque. La DB y el config son runtime/per-machine.
+  const snippet = [
+    '',
+    '# Phobos CodeGraph — runtime/per-machine (no commitear DB ni config local).',
+    '.codegraph/*',
+    '!.codegraph/launcher.mjs',
+    '',
+  ].join('\n');
   const content = existing.endsWith('\n') || existing === ''
     ? existing + snippet
     : existing + '\n' + snippet;
@@ -307,49 +349,16 @@ async function ensureCodeGraphInGitignore() {
   return { added: true };
 }
 
-// Crea (o reusa) el manifest aislado en .codegraph/package.json. Esto
-// es lo que hace que CodeGraph viva fuera del package.json principal del
-// proyecto, y por ende NO sea bajado por CI/CD cuando hace `npm install`.
-async function ensureCodeGraphHostManifest() {
-  const manifestPath = join(CODEGRAPH_HOST_DIR, 'package.json');
-  if (await fileExists(manifestPath)) return { created: false };
-
-  await mkdir(CODEGRAPH_HOST_DIR, { recursive: true }).catch(() => {});
-
-  const manifest = {
-    name: 'phobos-codegraph-host',
-    private: true,
-    version: '0.0.0',
-    description: 'Isolated install of @colbymchenry/codegraph for this project. NOT part of the main package.json — CI/CD will not install it.',
-    dependencies: {
-      [CODEGRAPH_PKG]: 'latest',
-    },
-  };
-  await safeWriteFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-  return { created: true };
-}
-
-// Invocar el binario del install aislado.
-// `.bin/codegraph` es un wrapper script (.cmd en Windows, shell script en
-// Unix) — NO un módulo JS. Por eso `node <path>` falla con MODULE_NOT_FOUND.
-// La forma correcta es ejecutar el path directo y dejar que el shell resuelva
-// la extensión (.cmd vía PATHEXT en Windows; ejecuta el sh-bang en Unix).
-// `runChild` usa `shell: true`, así que esto funciona en ambas plataformas.
-
+// Flujo completo de install / re-index / re-install para CodeGraph (GLOBAL).
 export async function installCodeGraph() {
-  // Header neutral — esta función maneja install / re-index / re-install
-  // según el estado detectado, así que el título no asume "Instalar".
-  console.log('\n' + cyan('▸ ') + bold('CodeGraph — índice semántico del código (install aislado)'));
-  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  →  ' + CODEGRAPH_HOST_DIR + '/node_modules/'));
+  console.log('\n' + cyan('▸ ') + bold('CodeGraph — índice semántico del código (install global)'));
+  console.log(dim('  paquete: ' + CODEGRAPH_PKG + '  →  ' + CODEGRAPH_GLOBAL + '/node_modules/'));
   console.log(dim('  fuente:  github.com/colbymchenry/codegraph'));
   console.log(dim('  qué hace: AST + grafo de relaciones; reduce ~94% los tool calls del researcher.'));
-  console.log(dim('  ⚡ NO toca el package.json principal — CI/CD nunca lo va a bajar.'));
-  console.log(dim('  ⚡ Usa npm (no pnpm/yarn) en el install aislado para evitar quirks de workspaces.'));
+  console.log(dim('  ⚡ Instalación GLOBAL — el proyecto solo recibe .codegraph/launcher.mjs + DB.'));
   console.log('');
 
-  // ─── Step 1/6: Verificar prerequisitos ─────────────────────────────
-  // No exigimos package.json — el install aislado funciona en cualquier
-  // directorio. Solo verificamos que estemos en un proyecto razonable.
+  // Prerequisitos básicos: estar en un proyecto razonable.
   if (!await fileExists('.git') && !await fileExists('package.json') && !await fileExists('AGENTS.md')) {
     console.log(yellow('  ✗ No parece un proyecto válido (sin .git, package.json o AGENTS.md).'));
     console.log(dim('    Corré el wizard desde la raíz de un repo.'));
@@ -359,35 +368,13 @@ export async function installCodeGraph() {
 
   const status = await detectCodeGraphStatus();
 
-  // Detección de install corrupto: existe node_modules en .codegraph/ pero
-  // no encontramos el package en la ubicación esperada. Causa típica: pnpm
-  // con workspaces guardó el paquete en .pnpm/ sin crear el symlink top-level,
-  // o un install previo se cortó a mitad. Limpiamos antes de reintentar.
-  const nodeModulesExists = await fileExists(join(CODEGRAPH_HOST_DIR, 'node_modules'));
-  const installCorrupt = nodeModulesExists && !status.pkgInstalled;
-  if (installCorrupt) {
-    console.log(yellow('  ⚠ Detecté un install previo con layout corrupto en .codegraph/node_modules/'));
-    console.log(dim('    (típico de pnpm en proyectos con workspaces, o de un install cortado a mitad)'));
-    console.log('');
-    const fixIt = await tuiYesNo('¿Limpiar .codegraph/node_modules/ y reinstalar desde cero?', true);
-    if (!fixIt) {
-      console.log(dim('  ⊘ saltado. CodeGraph va a seguir sin funcionar hasta limpiarlo.\n'));
-      return;
-    }
-    await rmrf(join(CODEGRAPH_HOST_DIR, 'node_modules'));
-    // Forzamos que el resto del flujo vea estado "sin paquete instalado".
-    status.pkgInstalled = false;
-    status.dbBuilt = false;
-    console.log(green('  ✓ Limpio. Continúo con install fresco.\n'));
-  }
-
-  // ─── Step 2/6: Decidir acción según estado actual ─────────────────
-  if (status.pkgInstalled && status.dbBuilt) {
+  // ─── Decisión rápida si ya está todo OK ────────────────────────────
+  if (status.pkgInstalled && status.shimReady && status.dbBuilt) {
     const { index } = await tuiSelect(
-      'CodeGraph ya está instalado e indexado. ¿Qué hacer?',
+      'CodeGraph ya está instalado e indexado en este proyecto. ¿Qué hacer?',
       [
         'Re-indexar (recomendado si el código cambió mucho)',
-        'Re-instalar el paquete (forzar actualización a la última versión)',
+        'Re-instalar el paquete global (forzar actualización)',
         'Cancelar',
       ],
       0,
@@ -398,8 +385,7 @@ export async function installCodeGraph() {
     }
     if (index === 0) {
       console.log(dim('\n  Re-indexando — puede tardar varios minutos en repos grandes.\n'));
-      await ensureCodeGraphShim();
-      const code = await runChild('node', [CODEGRAPH_SHIM, 'index'], 'Re-indexar CodeGraph');
+      const code = await runChild('node', [CODEGRAPH_LAUNCHER_LOCAL, 'index'], 'Re-indexar CodeGraph');
       if (code === 0) {
         console.log(green('\n  ✓ Re-indexación completa.\n'));
       } else {
@@ -407,12 +393,12 @@ export async function installCodeGraph() {
       }
       return;
     }
-    // index === 1: cae al flujo normal y reinstala el paquete.
+    // index === 1: continúa al flujo normal (reinstala el paquete global).
   } else if (status.pkgInstalled && !status.dbBuilt) {
-    console.log(dim('  ℹ Paquete instalado pero sin indexar todavía. Voy a inicializar + indexar.\n'));
+    console.log(dim('  ℹ Paquete global instalado pero sin indexar todavía. Voy a inicializar + indexar.\n'));
   } else {
     const confirm = await tuiYesNo(
-      '¿Instalar CodeGraph (aislado) en este proyecto?',
+      '¿Instalar CodeGraph (global) y configurar este proyecto?',
       true,
     );
     if (!confirm) {
@@ -421,73 +407,104 @@ export async function installCodeGraph() {
     }
   }
 
-  // ─── Step 3/6: Crear manifest aislado + .npmrc + instalar adentro ─
-  const m = await ensureCodeGraphHostManifest();
-  if (m.created) {
-    console.log(green('  ✓ ') + dim('Creé manifest aislado en ') + cyan(CODEGRAPH_HOST_DIR + '/package.json'));
-  } else {
-    console.log(dim('  ℹ Manifest aislado ya existe — reuso.'));
-  }
-
-  // .npmrc local: ignore-workspace + node-linker=hoisted. Crítico para pnpm
-  // en proyectos con workspaces (el host aislado NO debe heredar del workspace).
-  // Si lo creamos por primera vez ahora y ya había node_modules, ese
-  // node_modules quedó con el layout viejo — borramos para forzar re-install.
-  const npmrc = await ensureCodeGraphNpmrc();
-  if (npmrc.created) {
-    console.log(green('  ✓ ') + dim('Creé ') + cyan(CODEGRAPH_HOST_DIR + '/.npmrc') + dim(' (workspace-isolated + flat layout)'));
-    if (await fileExists(join(CODEGRAPH_HOST_DIR, 'node_modules'))) {
-      console.log(dim('    ℹ Limpio el node_modules viejo (se generó sin estas reglas).'));
-      await rmrf(join(CODEGRAPH_HOST_DIR, 'node_modules'));
+  // ─── Step: Detectar legacy install en el proyecto ───────────────────
+  const legacy = await detectLegacyCodeGraphInstall(cwd());
+  if (legacy.exists) {
+    console.log(yellow('  ⚠ Detecté instalación legacy en ') + cyan(legacy.path) +
+                dim(' (' + formatBytes(legacy.sizeBytes) + ')'));
+    console.log(dim('    Causa: install viejo cuando CodeGraph vivía dentro del proyecto.'));
+    console.log(dim('    El nuevo va a ' + CODEGRAPH_GLOBAL + '/ — el del proyecto sobra.'));
+    const clean = await tuiYesNo('  ¿Borrar el node_modules legacy del proyecto?', true);
+    if (clean) {
+      await rmrf(legacy.path);
+      // También borramos el .codegraph/package.json legacy y .npmrc si existen
+      // (eran del install aislado viejo, ahora viven global).
+      const legacyManifest = join(cwd(), '.codegraph', 'package.json');
+      const legacyNpmrc = join(cwd(), '.codegraph', '.npmrc');
+      const legacyShim = join(cwd(), '.codegraph', 'cg.cjs');
+      if (await fileExists(legacyManifest)) await rmrf(legacyManifest);
+      if (await fileExists(legacyNpmrc)) await rmrf(legacyNpmrc);
+      if (await fileExists(legacyShim)) await rmrf(legacyShim);
+      console.log(green('  ✓ ') + dim('Legacy borrado (node_modules + manifest + .npmrc + cg.cjs).'));
+    } else {
+      console.log(yellow('  Mantenido. El install global se hace igual; el legacy queda como peso muerto.'));
     }
   }
 
-  // Forzamos NPM para el install aislado independientemente del package
-  // manager del proyecto principal. Razones:
-  //   1. npm crea node_modules plano predecible (sin .pnpm/, sin PnP, etc).
-  //   2. npm viene con Node, no requiere instalación adicional.
-  //   3. El install aislado NO comparte nada con el proyecto principal,
-  //      por lo tanto el package manager principal no influye.
-  //   4. Evita los problemas de pnpm con workspaces (hoisting, symlinks
-  //      que no se crean en isolated mode, etc).
-  // El .npmrc local (ignore-workspace + hoisted) ya está como defensa extra
-  // por si alguien corre pnpm install ahí a mano después.
+  // ─── Step: Storage location prompt ──────────────────────────────────
+  console.log('');
+  const storage = await promptStorageDisk({
+    componentName: 'CodeGraph (node_modules + binario)',
+    defaultLabel: `${CODEGRAPH_GLOBAL} (default — disco del home)`,
+    suggestedSubdir: 'phobos\\codegraph',
+  });
+
+  if (storage.mode === 'custom') {
+    try {
+      await ensureLinkTo({
+        linkPath: CODEGRAPH_GLOBAL,
+        targetPath: storage.basePath,
+        componentName: 'CodeGraph global',
+      });
+    } catch (e) {
+      console.log(red('  ✗ ' + e.message));
+      console.log(dim('  Reintentá el install cuando lo resuelvas.\n'));
+      return;
+    }
+  }
+
+  // ─── Step: Crear manifest + .npmrc + shim globales ──────────────────
+  await mkdir(CODEGRAPH_GLOBAL, { recursive: true });
+
+  const m = await ensureCodeGraphHostManifestGlobal();
+  console.log((m.created ? green('  ✓ ') : dim('  ℹ ')) +
+              dim((m.created ? 'Creé ' : 'Reuso ') + 'manifest global: ') +
+              cyan(join(CODEGRAPH_GLOBAL, 'package.json')));
+
+  const npmrc = await ensureCodeGraphNpmrcGlobal();
+  console.log((npmrc.created ? green('  ✓ ') : dim('  ℹ ')) +
+              dim((npmrc.created ? 'Creé ' : 'Reuso ') + '.npmrc global: ') +
+              cyan(join(CODEGRAPH_GLOBAL, '.npmrc')));
+
+  // ─── Step: npm install en el global ─────────────────────────────────
   const projectPm = await detectPackageManager();
-  console.log(dim('  Project package manager: ') + cyan(projectPm) + dim('  (no afecta — uso npm para el install aislado)') + '\n');
+  console.log(dim('\n  Project package manager: ') + cyan(projectPm) + dim('  (no afecta — uso npm para el install global)') + '\n');
 
   rl.pause();
   const installCode = await runChild(
     'npm', ['install'],
-    `Instalar ${CODEGRAPH_PKG} (aislado con npm en ${CODEGRAPH_HOST_DIR}/)`,
-    { cwd: CODEGRAPH_HOST_DIR },
+    `Instalar ${CODEGRAPH_PKG} (global con npm en ${CODEGRAPH_GLOBAL}/)`,
+    { cwd: CODEGRAPH_GLOBAL },
   );
   if (installCode !== 0) {
     const verify = await detectCodeGraphStatus();
     if (!verify.pkgInstalled) {
       console.log(red(`\n  ✗ Falló la instalación con npm (exit ${installCode}).`));
-      console.log(dim('    Probá manualmente: ') + cyan(`cd ${CODEGRAPH_HOST_DIR} && npm install`));
+      console.log(dim('    Probá manualmente: ') + cyan(`cd "${CODEGRAPH_GLOBAL}" && npm install`));
       console.log('');
       return;
     }
     console.log(yellow(`\n  ⚠ npm retornó exit ${installCode} pero el paquete está. Continuamos.\n`));
   } else {
-    console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado en ${CODEGRAPH_HOST_DIR}/node_modules/\n`));
+    console.log(green(`\n  ✓ ${CODEGRAPH_PKG} instalado en ${CODEGRAPH_GLOBAL}/node_modules/\n`));
   }
 
-  // ─── Step 4/6: Crear shim estable + inicializar config ──────────
-  // Siempre regeneramos el shim (force: true) para asegurar que tenga la
-  // lógica más reciente de resolución (createRequire vs paths hardcoded).
-  const shimRes = await ensureCodeGraphShim({ force: true });
-  console.log(green('  ✓ ') + dim((shimRes.created ? 'Creé' : 'Regeneré') + ' shim de invocación en ') + cyan(CODEGRAPH_SHIM));
+  // ─── Step: Generar shim global + launcher local ─────────────────────
+  await ensureCodeGraphShimGlobal();
+  console.log(green('  ✓ ') + dim('Shim global regenerado: ') + cyan(CODEGRAPH_SHIM_GLOBAL));
 
+  await writeProjectCodeGraphLauncher();
+  console.log(green('  ✓ ') + dim('Launcher escrito en el proyecto: ') + cyan(CODEGRAPH_LAUNCHER_LOCAL));
+
+  // ─── Step: codegraph init (genera .codegraph/config.json) ────────────
   if (!await fileExists('.codegraph/config.json') && !await fileExists('.codegraph/config.yaml')) {
     const initCode = await runChild(
-      'node', [CODEGRAPH_SHIM, 'init'],
+      'node', [CODEGRAPH_LAUNCHER_LOCAL, 'init'],
       'Inicializar CodeGraph (.codegraph/config.json)',
     );
     if (initCode !== 0) {
       console.log(yellow(`\n  ⚠ codegraph init falló (exit ${initCode}). Probá manualmente:`));
-      console.log(dim('    ') + cyan(`node ${CODEGRAPH_SHIM} init -i`));
+      console.log(dim('    ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} init -i`));
       console.log('');
     } else {
       console.log(green('\n  ✓ Config generada en .codegraph/\n'));
@@ -496,49 +513,53 @@ export async function installCodeGraph() {
     console.log(dim('  ℹ .codegraph/ ya tiene config — salteo init.\n'));
   }
 
-  // ─── Step 5/6: .gitignore ─────────────────────────────────────────
+  // ─── Step: .gitignore ───────────────────────────────────────────────
   const gi = await ensureCodeGraphInGitignore();
   if (gi.added) {
-    console.log(green('  ✓ ') + dim('Agregué ') + cyan('.codegraph/') + dim(' a .gitignore'));
+    console.log(green('  ✓ ') + dim('Actualicé ') + cyan('.gitignore') + dim(' (ignora .codegraph/ excepto launcher.mjs)'));
   } else {
     console.log(dim('  ℹ .codegraph/ ya estaba en .gitignore'));
   }
   console.log('');
 
-  // ─── Step 6/6: Indexación inicial ─────────────────────────────────
+  // ─── Step: Indexación inicial ───────────────────────────────────────
   const wantIndex = await tuiYesNo(
     '¿Correr indexación inicial ahora? (puede tardar varios minutos en repos grandes)',
     true,
   );
   if (wantIndex) {
-    const indexCode = await runChild('node', [CODEGRAPH_SHIM, 'index'], 'Indexar el proyecto');
+    const indexCode = await runChild('node', [CODEGRAPH_LAUNCHER_LOCAL, 'index'], 'Indexar el proyecto');
     if (indexCode === 0) {
       console.log(green('\n  ✓ Indexación inicial completa.'));
     } else {
       console.log(yellow(`\n  ⚠ codegraph index salió con exit ${indexCode}.`));
-      console.log(dim('    Reintentá con: ') + cyan(`node ${CODEGRAPH_SHIM} index`));
+      console.log(dim('    Reintentá con: ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} index`));
     }
   } else {
     console.log(dim('\n  ⊘ Indexación pospuesta. Cuando quieras, correla con:'));
-    console.log(dim('    ') + cyan(`node ${CODEGRAPH_SHIM} index`));
+    console.log(dim('    ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} index`));
   }
 
-  // ─── Resumen final ─────────────────────────────────────────────────
+  // ─── Resumen final ──────────────────────────────────────────────────
+  console.log('');
+  console.log(bold('  Layout:'));
+  console.log(dim('    Global (compartido):  ') + cyan(CODEGRAPH_GLOBAL));
+  console.log(dim('    Proyecto (este repo): ') + cyan('.codegraph/launcher.mjs') + dim(' + .codegraph/config.json + .codegraph/codegraph.db'));
   console.log('');
   console.log(bold('  Próximos pasos:'));
-  console.log(dim('    · Probá una query:  ') + cyan(`node ${CODEGRAPH_SHIM} query "..."`));
-  console.log(dim('    · Tests afectados:  ') + cyan(`node ${CODEGRAPH_SHIM} affected <files>`));
-  console.log(dim('    · El @researcher detectará la instalación automáticamente y usará CodeGraph'));
-  console.log(dim('      antes de caer a rg/grep, a partir de la próxima task SDD.'));
+  console.log(dim('    · Probá una query:  ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} query "..."`));
+  console.log(dim('    · Tests afectados:  ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} affected <files>`));
+  console.log(dim('    · El @researcher detectará la instalación automáticamente.'));
   console.log('');
-  console.log(dim('  Para borrar todo: ') + cyan(`rm -rf ${CODEGRAPH_HOST_DIR}/`) + dim('  (auto-ignored, no afecta nada más).'));
+  console.log(dim('  Borrar todo lo del proyecto: ') + cyan(`rm -rf .codegraph/`) + dim('  (no afecta el global).'));
+
+  if (storage.mode === 'custom') {
+    printVerificationCommands('CodeGraph', CODEGRAPH_GLOBAL, storage.basePath);
+  }
   console.log('');
 }
 
-// Router para la entrada "CodeGraph" del menú principal. Reusa installCodeGraph,
-// que ya es status-aware (decide install / re-index / re-install según estado).
-// `adapter` se acepta por simetría con otras acciones (actionMemory, etc.) —
-// CodeGraph en sí es IDE-agnostic, no usa el adapter.
+// Router para la entrada "CodeGraph" del menú principal.
 export async function actionCodeGraph(_adapter) {
   return installCodeGraph();
 }
@@ -546,23 +567,7 @@ export async function actionCodeGraph(_adapter) {
 // ═══════════════════════════════════════════════════════════════════
 // Tools registry — Opción A (registry plano)
 // ═══════════════════════════════════════════════════════════════════
-//
-// Cada entry describe una herramienta del menú "Instalar herramientas".
-// Para agregar una nueva: 1 entry. El menú y el dispatcher se generan
-// del array, no hay switch hardcodeado por índice.
-//
-// Contrato de cada Tool:
-//   id         string — identificador único (no se muestra, sirve para debug).
-//   label      string | async () => string — texto del item. Si es función,
-//              puede consultar el filesystem para mostrar estado dinámico
-//              (ej: "instalado · re-instalar / re-indexar").
-//   action     async () => void — qué hacer cuando el usuario lo elige.
-//   exitAfter  bool (opcional) — si true, después de ejecutar el tool
-//              cierra el wizard (reservado por si alguna acción futura
-//              reemplaza el proceso).
-//
-// Para growth grande (>10 herramientas) considerar Opción C (plugin
-// discovery: cada tool en su propio archivo bajo scripts/lib/tools/).
+
 const TOOLS = [
   {
     id: 'autoskills',
@@ -577,8 +582,6 @@ const TOOLS = [
   {
     id: 'impeccable',
     label: 'Instalar impeccable      ' + dim('— skill de diseño/UI (vocab + anti-patterns)'),
-    // Wrapper: cuando actionInstallTools llama tool.action(), le pasamos el adapter
-    // del contexto. Esto se setea al entrar a actionInstallTools(adapter).
     action: (adapter) => installImpeccable(adapter),
   },
   {
@@ -589,7 +592,7 @@ const TOOLS = [
         return 'Instalar CodeGraph       ' + dim('(instalado · re-instalar / re-indexar)');
       }
       if (s.pkgInstalled && !s.dbBuilt) {
-        return 'Instalar CodeGraph       ' + dim('(paquete instalado · falta indexar)');
+        return 'Instalar CodeGraph       ' + dim('(paquete global instalado · falta indexar)');
       }
       return 'Instalar CodeGraph       ' + dim('— índice semántico del código (–94% tool calls)');
     },
@@ -607,8 +610,6 @@ export async function actionInstallTools(adapter) {
       dim('Elegí una opción con ↑/↓ y Enter.'),
     ]);
 
-    // Resolver labels: si es función la await-eamos para que pueda consultar
-    // estado del filesystem. Si es string, lo dejamos como está.
     const labels = await Promise.all(
       TOOLS.map(t => typeof t.label === 'function' ? t.label() : t.label),
     );
@@ -625,12 +626,9 @@ export async function actionInstallTools(adapter) {
 
     const tool = TOOLS[index];
     rl.pause();
-    // Algunas tools necesitan el adapter (ej: impeccable usa adapter.skillDirs).
-    // Otras son IDE-agnostic — el adapter pasa de largo sin afectar.
     await tool.action(adapter);
 
     if (tool.exitAfter) {
-      // Acción con exitAfter — el wizard cierra después de correrla.
       showHappyGoodbye();
       finalizeAndExit(0);
       return;

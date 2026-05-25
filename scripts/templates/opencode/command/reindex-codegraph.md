@@ -3,7 +3,7 @@ description: Re-indexa el código del proyecto en CodeGraph (.codegraph/codegrap
 agent: phobos
 ---
 
-El usuario invocó `/reindex-codegraph` — comando administrativo, NO una tarea SDD. Tu único trabajo es: ejecutar `node .codegraph/cg.cjs index`, leer su output, traducir al chat en español argentino.
+El usuario invocó `/reindex-codegraph` — comando administrativo, NO una tarea SDD. Tu único trabajo es: ejecutar `node .codegraph/launcher.mjs index`, leer su output, traducir al chat en español argentino.
 
 ## Argumentos del usuario
 
@@ -31,7 +31,7 @@ Si detectás caracteres peligrosos en `$ARGUMENTS`, antes de ejecutar reportá:
 ## Comando a ejecutar
 
 ```bash
-node .codegraph/cg.cjs index
+node .codegraph/launcher.mjs index
 ```
 
 **Ejecutalo directamente.** NO hagas healthchecks previos extensos — el comando mismo te dice si el binario o la DB no existen.
@@ -39,7 +39,7 @@ node .codegraph/cg.cjs index
 Solo un check rápido permitido ANTES de invocar (opcional, ayuda a dar mejor error si falta):
 
 ```bash
-ls .codegraph/cg.cjs 2>/dev/null
+ls .codegraph/launcher.mjs 2>/dev/null
 ```
 
 Si ese ls falla → andá directo al Caso 2 ("CodeGraph no instalado") y NO ejecutes el index.
@@ -70,7 +70,7 @@ Reportá en español argentino (voseo), ≤4 líneas:
 
 ### Caso 2 — CodeGraph no instalado
 
-`ls` no encuentra `.codegraph/cg.cjs`, o el comando falla con `Cannot find module '.../cg.cjs'`, o `ENOENT` sobre `.codegraph/`.
+`ls` no encuentra `.codegraph/launcher.mjs`, o el comando falla con `Cannot find module '.../cg.cjs'`, o `ENOENT` sobre `.codegraph/`.
 
 Reportá:
 
@@ -91,8 +91,8 @@ Reportá:
 > ⚠️ El paquete de CodeGraph está pero falta la DB inicial. Corré:
 >
 > ```bash
-> node .codegraph/cg.cjs init
-> node .codegraph/cg.cjs index
+> node .codegraph/launcher.mjs init
+> node .codegraph/launcher.mjs index
 > ```
 >
 > O alternativamente: `phobos` → **Instalar herramientas** → **Instalar CodeGraph** → elegí *"Re-indexar"*.
@@ -110,7 +110,7 @@ Reportá:
 > npx github:sebaarce/phobos
 > ```
 >
-> En el wizard elegí **Instalar herramientas** → **Instalar CodeGraph**. La instalación nueva usa `npm` aislado y el shim `.codegraph/cg.cjs`, que evita el problema.
+> En el wizard elegí **Instalar herramientas** → **Instalar CodeGraph**. La instalación nueva usa `npm` aislado y el shim `.codegraph/launcher.mjs`, que evita el problema.
 
 ### Caso 5 — Lenguaje no soportado por parsers
 

@@ -2,7 +2,7 @@
 description: Re-indexa la memoria semántica del vault en Qdrant. Incremental por defecto, full para reindex completo.
 argument-hint: "[full]"
 disable-model-invocation: true
-allowed-tools: Bash(node vault/memory/.engine/index-vault.mjs *)
+allowed-tools: Bash(node vault/memory/.engine/launcher.mjs index *)
 ---
 
 El usuario invocó `/reindex-memory` — comando administrativo, NO una tarea SDD. Tu único trabajo es: ejecutar el script de indexación, leer su output, traducir al chat en español argentino.
@@ -35,13 +35,13 @@ Si detectás caracteres peligrosos en `$ARGUMENTS`, antes de ejecutar reportá:
 Si el parsing arrojó modo force, ejecutá:
 
 ```bash
-node vault/memory/.engine/index-vault.mjs --force
+node vault/memory/.engine/launcher.mjs index --force
 ```
 
 Si no, ejecutá:
 
 ```bash
-node vault/memory/.engine/index-vault.mjs --incremental
+node vault/memory/.engine/launcher.mjs index --incremental
 ```
 
 **Ejecutalo directamente.** NO hagas healthchecks previos, NO verifiques existencia de archivos — el script ya valida todo internamente y reporta errores claros con mensajes específicos en el output.

@@ -35,7 +35,7 @@ Interpretación:
 **Al invocar el script**, pasá cada flag/valor como argumento separado (NO como string concatenada):
 
 - ✓ Correcto: invoca el script con args como array: `["--tasks", "10", "--section", "tasks"]`.
-- ✗ Incorrecto: `node vault/memory/.engine/list-memory.mjs $ARGUMENTS` (concatena raw).
+- ✗ Incorrecto: `node vault/memory/.engine/launcher.mjs list $ARGUMENTS` (concatena raw).
 
 Si tu tool de ejecución solo acepta string, primero validá con la whitelist y luego construí el string a partir de los valores validados — nunca pases bytes del usuario sin filtrar.
 
@@ -44,8 +44,8 @@ Si tu tool de ejecución solo acepta string, primero validá con la whitelist y 
 ### Paso 1 — Verificar que el engine esté instalado
 
 ```bash
-ls vault/memory/.engine/list-memory.mjs   # bash
-Test-Path vault/memory/.engine/list-memory.mjs   # PowerShell
+ls vault/memory/.engine/launcher.mjs   # bash
+Test-Path vault/memory/.engine/launcher.mjs   # PowerShell
 ```
 
 Si no existe:
@@ -66,13 +66,13 @@ Y terminá ahí.
 
 ```bash
 # Sin args:
-node vault/memory/.engine/list-memory.mjs
+node vault/memory/.engine/launcher.mjs list
 
 # Con args validados (ejemplo: --tasks 10 + --json):
-node vault/memory/.engine/list-memory.mjs --tasks 10 --json
+node vault/memory/.engine/launcher.mjs list --tasks 10 --json
 ```
 
-**NUNCA** ejecutes `node vault/memory/.engine/list-memory.mjs $ARGUMENTS` literal — concatena bytes sin filtrar del usuario al shell.
+**NUNCA** ejecutes `node vault/memory/.engine/launcher.mjs list $ARGUMENTS` literal — concatena bytes sin filtrar del usuario al shell.
 
 El script no necesita Qdrant — solo lee el filesystem. Funciona incluso si Qdrant está caído.
 

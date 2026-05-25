@@ -242,15 +242,15 @@ export async function actionResetQdrant() {
   rl.pause();
   const indexCode = await runChild(
     'node',
-    ['vault/memory/.engine/index-vault.mjs', '--force'],
-    'index-vault.mjs --force',
+    ['vault/memory/.engine/launcher.mjs', 'index', '--force'],
+    'launcher.mjs index --force',
   );
   const activeCollection = await getProjectActiveCollection();
   history.push({
     label: 'Re-indexación',
     value: indexCode === 0
       ? `Vault del proyecto re-indexado en collection ${activeCollection}`
-      : `Falló (exit ${indexCode}) — corré manualmente con node vault/memory/.engine/index-vault.mjs --force`,
+      : `Falló (exit ${indexCode}) — corré manualmente con node vault/memory/.engine/launcher.mjs index --force`,
   });
 
   // ─── Pantalla final ─────────────────────────────────────────────────

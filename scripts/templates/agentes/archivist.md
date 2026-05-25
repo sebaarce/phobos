@@ -32,7 +32,7 @@ permission:
     "node vault/memory/.engine/costs.mjs*": allow
     # CodeGraph re-index after Close task (best-effort). Only `index` subcommand
     # — `query` and `affected` belong to the researcher, not us.
-    "node .codegraph/cg.cjs index*": allow
+    "node .codegraph/launcher.mjs index*": allow
 security:
   slug_regex: "^[a-zA-Z0-9_-]{3,60}$"
   forbidden_paths:
@@ -272,13 +272,13 @@ Do not invent or hardcode a collection name. Always read from the config when ne
 If the memory engine is installed, run the incremental indexer so the next task's Researcher pre-flight sees the new insights/wiki/glossary you just wrote.
 
 ```bash
-ls vault/memory/.engine/index-vault.mjs 2>/dev/null
+ls vault/memory/.engine/launcher.mjs 2>/dev/null
 ```
 
 If the file exists, execute:
 
 ```bash
-node vault/memory/.engine/index-vault.mjs --incremental
+node vault/memory/.engine/launcher.mjs index --incremental
 ```
 
 Expected behavior:
@@ -292,7 +292,7 @@ Expected behavior:
 | Condition | What you do |
 |-----------|-------------|
 | Engine file does not exist | Skip silently. The project does not have Memory installed. |
-| Qdrant unreachable (`docker compose down`) | Log a follow-up in `conclusion.md`: "Memory re-index skipped — Qdrant unreachable. Run `docker compose -f docker-compose.qdrant.yml up -d && node vault/memory/.engine/index-vault.mjs --incremental` to catch up." |
+| Qdrant unreachable (`docker compose down`) | Log a follow-up in `conclusion.md`: "Memory re-index skipped — Qdrant unreachable. Run `docker compose -f docker-compose.qdrant.yml up -d && node vault/memory/.engine/launcher.mjs index --incremental` to catch up." |
 | Indexer exits non-zero for any other reason | Capture the exit code and last 5 lines of stderr; log them in `conclusion.md` under "Follow-ups". |
 
 In all failure cases the Close task itself completes — the re-index is best-effort, not blocking.
@@ -317,19 +317,19 @@ Do not try to query the DB schema yourself — the indexer manages it.
 **Procedure**:
 
 ```bash
-ls .codegraph/cg.cjs 2>/dev/null
+ls .codegraph/launcher.mjs 2>/dev/null
 ```
 
 If the file exists, execute:
 
 ```bash
-node .codegraph/cg.cjs index --incremental
+node .codegraph/launcher.mjs index --incremental
 ```
 
 If `--incremental` is not supported by the installed CodeGraph version (exit code complaining about unknown flag), retry without it:
 
 ```bash
-node .codegraph/cg.cjs index
+node .codegraph/launcher.mjs index
 ```
 
 Expected behavior:
@@ -342,8 +342,8 @@ Expected behavior:
 
 | Condition | What you do |
 |-----------|-------------|
-| `.codegraph/cg.cjs` does not exist | Skip silently. The project does not have CodeGraph installed. No follow-up needed — CodeGraph is optional. |
-| Both `index --incremental` and `index` fail with exit ≠ 0 | Capture exit code and last 5 lines of stderr. Log in `conclusion.md` under "Follow-ups": _"CodeGraph re-index failed (exit X). Run `node .codegraph/cg.cjs index` manually to catch up. Stderr: ..."_ |
+| `.codegraph/launcher.mjs` does not exist | Skip silently. The project does not have CodeGraph installed. No follow-up needed — CodeGraph is optional. |
+| Both `index --incremental` and `index` fail with exit ≠ 0 | Capture exit code and last 5 lines of stderr. Log in `conclusion.md` under "Follow-ups": _"CodeGraph re-index failed (exit X). Run `node .codegraph/launcher.mjs index` manually to catch up. Stderr: ..."_ |
 | Indexing succeeds but takes > 5 minutes | Let it complete. Note duration in `conclusion.md` follow-ups if > 10 min: _"CodeGraph index took N min — consider running `/reindex-codegraph` outside of task close in future."_ |
 | `.codegraph/codegraph.db` is locked (another process indexing) | Log follow-up: _"CodeGraph index skipped — DB locked. Retry with `/reindex-codegraph` once the other process finishes."_ |
 
@@ -560,7 +560,7 @@ If a re-index was skipped, indicate why:
 ```
 Re-index:
   - Memory (RAG): ⊘ skipped (engine no instalado)
-  - CodeGraph: ⊘ skipped (.codegraph/cg.cjs no existe)
+  - CodeGraph: ⊘ skipped (.codegraph/launcher.mjs no existe)
 ```
 
 Or if it failed:

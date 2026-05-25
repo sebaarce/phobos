@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 // Indexes vault/memory/{insights,wiki,glossary}/**/*.md into Qdrant.
 //
-// Usage:
-//   node vault/memory/.engine/index-vault.mjs              # full reindex
-//   node vault/memory/.engine/index-vault.mjs --incremental # only changed files
+// El engine vive GLOBALMENTE en <base>/memory-engine/. Recibe el path
+// absoluto del proyecto vía --project para resolver config + state local.
 //
-// Idempotent: re-running on unchanged files is a no-op (hash check skips them).
+// Usage (vía launcher local — recomendado):
+//   node vault/memory/.engine/launcher.mjs index             # full reindex
+//   node vault/memory/.engine/launcher.mjs index --incremental
+//
+// Usage (invocación directa):
+//   node ~/.phobos/memory-engine/index-vault.mjs --project <abs-path>
+//
+// Idempotente: re-running on unchanged files is a no-op (hash check skips them).
 
-import { readFile, readdir, stat } from 'node:fs/promises';
-import { join, relative, dirname } from 'node:path';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { join, relative, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 
@@ -17,31 +23,37 @@ import { chunkMarkdown, chunkId, contentHash } from './chunk.mjs';
 import { ensureCollection, upsertPoints, deletePointsByFile, ping } from './qdrant-client.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, '..', '..', '..');
-const CONFIG_PATH = join(__dirname, 'config.json');
-const STATE_PATH = join(__dirname, '.index-state.json');
 
-async function loadConfig() {
-  const raw = await readFile(CONFIG_PATH, 'utf-8');
+function parseProjectFlag(argv) {
+  const idx = argv.indexOf('--project');
+  if (idx >= 0 && argv[idx + 1]) {
+    const p = resolvePath(argv[idx + 1]);
+    argv.splice(idx, 2);
+    return p;
+  }
+  return null;
+}
+
+async function loadConfig(configPath) {
+  const raw = await readFile(configPath, 'utf-8');
   return JSON.parse(raw);
 }
 
-async function loadState() {
-  if (!existsSync(STATE_PATH)) return { files: {} };
+async function loadState(statePath) {
+  if (!existsSync(statePath)) return { files: {} };
   try {
-    return JSON.parse(await readFile(STATE_PATH, 'utf-8'));
+    return JSON.parse(await readFile(statePath, 'utf-8'));
   } catch {
     return { files: {} };
   }
 }
 
-async function saveState(state) {
-  const { writeFile } = await import('node:fs/promises');
-  await writeFile(STATE_PATH, JSON.stringify(state, null, 2));
+async function saveState(statePath, state) {
+  await writeFile(statePath, JSON.stringify(state, null, 2));
 }
 
-async function walkMarkdown(root) {
-  const absRoot = join(PROJECT_ROOT, root);
+async function walkMarkdown(projectRoot, root) {
+  const absRoot = join(projectRoot, root);
   if (!existsSync(absRoot)) return [];
   const out = [];
   async function walk(dir) {
@@ -59,8 +71,8 @@ async function walkMarkdown(root) {
   return out;
 }
 
-async function indexFile(filePath, config, state, force) {
-  const relPath = relative(PROJECT_ROOT, filePath).replace(/\\/g, '/');
+async function indexFile(filePath, projectRoot, config, state, force) {
+  const relPath = relative(projectRoot, filePath).replace(/\\/g, '/');
   const content = await readFile(filePath, 'utf-8');
   const hash = await contentHash(content);
 
@@ -69,7 +81,6 @@ async function indexFile(filePath, config, state, force) {
     return { skipped: true, relPath };
   }
 
-  // File changed — wipe old chunks first, then re-insert.
   await deletePointsByFile(
     config.qdrant.url,
     config.qdrant.collection,
@@ -88,7 +99,6 @@ async function indexFile(filePath, config, state, force) {
     return { skipped: false, relPath, chunks: 0 };
   }
 
-  // e5 models expect "passage: " prefix for documents (and "query: " for queries).
   const texts = chunks.map(c => `passage: ${c.text}`);
   const vectors = await embed(texts, {
     model: config.model.name,
@@ -115,31 +125,33 @@ async function indexFile(filePath, config, state, force) {
   return { skipped: false, relPath, chunks: chunks.length };
 }
 
-// Qdrant accepts unsigned 64-bit ints OR UUIDs as IDs. We hash the chunkId
-// string (filePath + index) into a stable unsigned 64-bit integer.
 function deterministicId(relPath, chunkIndex) {
   const raw = chunkId(relPath, chunkIndex);
   let hash = 0n;
   for (let i = 0; i < raw.length; i++) {
     hash = (hash * 31n + BigInt(raw.charCodeAt(i))) & 0xFFFFFFFFFFFFFFFFn;
   }
-  // Qdrant point IDs must fit in u64; we return the integer as a number/string.
   return Number(hash % BigInt(Number.MAX_SAFE_INTEGER));
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const incremental = args.includes('--incremental');
-  const force = args.includes('--force');
+  const argv = process.argv.slice(2);
+  const projectRoot = parseProjectFlag(argv) || join(__dirname, '..', '..', '..');
+  const incremental = argv.includes('--incremental');
+  const force = argv.includes('--force');
 
+  const configPath = join(projectRoot, 'vault', 'memory', '.engine', 'config.json');
+  const statePath  = join(projectRoot, 'vault', 'memory', '.engine', '.index-state.json');
+
+  console.log('[memory] project: ' + projectRoot);
   console.log('[memory] loading config...');
-  const config = await loadConfig();
+  const config = await loadConfig(configPath);
 
   console.log(`[memory] qdrant: ${config.qdrant.url}`);
   const alive = await ping(config.qdrant.url);
   if (!alive) {
     console.error(`[memory] qdrant unreachable at ${config.qdrant.url}`);
-    console.error(`[memory] start it with: docker compose -f docker-compose.qdrant.yml up -d`);
+    console.error(`[memory] start it with: docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d`);
     process.exit(1);
   }
 
@@ -152,13 +164,12 @@ async function main() {
   );
   if (created) console.log(`[memory] created collection "${config.qdrant.collection}"`);
 
-  const state = await loadState();
+  const state = await loadState(statePath);
   if (force) state.files = {};
 
-  // Collect all markdown files from configured roots.
   const allFiles = [];
   for (const root of config.vault.roots) {
-    const files = await walkMarkdown(root);
+    const files = await walkMarkdown(projectRoot, root);
     allFiles.push(...files);
   }
 
@@ -173,7 +184,7 @@ async function main() {
   const start = Date.now();
 
   for (const file of allFiles) {
-    const result = await indexFile(file, config, state, force);
+    const result = await indexFile(file, projectRoot, config, state, force);
     if (result.skipped) {
       skipped++;
       if (!incremental) console.log(`  · ${result.relPath} (unchanged)`);
@@ -184,7 +195,7 @@ async function main() {
     }
   }
 
-  await saveState(state);
+  await saveState(statePath, state);
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log('');

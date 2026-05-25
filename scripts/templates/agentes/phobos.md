@@ -172,13 +172,13 @@ Cuando el usuario hace una **pregunta** cuya respuesta requiere leer el contenid
 ANTES de delegar nada, chequeá si ya hay research previo del mismo tema:
 
 ```bash
-ls vault/memory/.engine/search.mjs 2>/dev/null
+ls vault/memory/.engine/launcher.mjs 2>/dev/null
 ```
 
 Si el archivo existe:
 
 ```bash
-node vault/memory/.engine/search.mjs "<la pregunta del usuario tal cual>" --top 3 --json
+node vault/memory/.engine/launcher.mjs search "<la pregunta del usuario tal cual>" --top 3 --json
 ```
 
 Decisión binaria — **AMBAS condiciones deben cumplirse para cache hit válido**:

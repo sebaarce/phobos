@@ -151,6 +151,7 @@ export async function detectResearcherHasRAG(adapter) {
   try {
     const content = await readFile(join(agentDir, 'researcher.md'), 'utf-8');
     return /Pre-flight:\s*semantic\s*search/i.test(content)
+      || /vault\/memory\/\.engine\/launcher\.mjs/.test(content)
       || /vault\/memory\/\.engine\/search\.mjs/.test(content);
   } catch {
     return false;
@@ -249,12 +250,14 @@ export async function detectAgentsHaveMemorySupport(adapter) {
   try {
     const r = await readFile(researcherPath, 'utf-8');
     researcherOK = /Pre-flight:\s*semantic\s*search/i.test(r)
+      || /vault\/memory\/\.engine\/launcher\.mjs/.test(r)
       || /vault\/memory\/\.engine\/search\.mjs/.test(r);
   } catch {}
 
   try {
     const a = await readFile(archivistPath, 'utf-8');
     archivistOK = /Trigger\s*semantic\s*re-?index/i.test(a)
+      || /vault\/memory\/\.engine\/launcher\.mjs/.test(a)
       || /vault\/memory\/\.engine\/index-vault\.mjs/.test(a);
   } catch {}
 
@@ -350,10 +353,10 @@ export async function actionInspectQdrant(adapter) {
   const mine = collections.find(c => c.name === mySlug);
   if (!mine) {
     console.log('  ' + yellow('  ⚠ La collection todavía no existe.'));
-    console.log('  ' + dim('    Corré: ') + cyan('node vault/memory/.engine/index-vault.mjs'));
+    console.log('  ' + dim('    Corré: ') + cyan('node vault/memory/.engine/launcher.mjs index'));
   } else if (mine.points === 0) {
     console.log('  ' + yellow('  ⚠ Existe pero está vacía (0 points).'));
-    console.log('  ' + dim('    El archivist nunca indexó, o se reseteó. Corré: ') + cyan('node vault/memory/.engine/index-vault.mjs --force'));
+    console.log('  ' + dim('    El archivist nunca indexó, o se reseteó. Corré: ') + cyan('node vault/memory/.engine/launcher.mjs index --force'));
   } else {
     console.log('  ' + dim('  Points totales: ') + cyan(mine.points));
     console.log('  ' + dim('  Dimensiones:    ') + cyan(mine.dims + 'd, ' + mine.distance));
@@ -482,7 +485,7 @@ export async function actionInspectQdrant(adapter) {
       console.log('  ' + dim('      3. Crear una tarea nueva de prueba (Open task, no Resume).'));
       console.log('  ' + dim('      4. Volver a Inspect Qdrant y verificar.'));
       console.log('  ' + dim('    Si persiste: el researcher puede estar fallando silenciosamente al correr'));
-      console.log('  ' + dim('    search.mjs (ej: por permisos). Revisá los logs de la sesión hija.'));
+      console.log('  ' + dim('    el launcher search (ej: por permisos). Revisá los logs de la sesión hija.'));
     } else {
       console.log('  ' + yellow('  ⚠ Uso mixto: algunas tareas post-Memory tienen Previous insights, otras no.'));
       console.log('  ' + dim('    Puede ser intermitente — chequeá las que faltan, capaz fallaron por Qdrant down momentáneo.'));
@@ -493,7 +496,7 @@ export async function actionInspectQdrant(adapter) {
   console.log('');
   console.log('  ' + bold('Cómo probar end-to-end manualmente'));
   console.log('  ' + dim('  Query semántica desde terminal:'));
-  console.log('    ' + cyan('node vault/memory/.engine/search.mjs "<tu query>"'));
+  console.log('    ' + cyan('node vault/memory/.engine/launcher.mjs search "<tu query>"'));
   console.log('  ' + dim('  Activity en vivo (logs del container):'));
   console.log('    ' + cyan('docker logs -f phobos-qdrant'));
   console.log('  ' + dim('  Buscás líneas "POST /collections/.../points/search" o "/points" (upsert).'));

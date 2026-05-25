@@ -230,8 +230,8 @@ export async function actionSetCollection() {
     rl.pause();
     const r = await runChildCaptured(
       'node',
-      ['vault/memory/.engine/index-vault.mjs', '--force'],
-      'index-vault.mjs --force (crea collection nueva)',
+      ['vault/memory/.engine/launcher.mjs', 'index', '--force'],
+      'launcher.mjs index --force (crea collection nueva)',
     );
     if (r.code !== 0) {
       console.log('');
@@ -302,8 +302,8 @@ export async function actionSetCollection() {
       rl.pause();
       const r = await runChildCaptured(
         'node',
-        ['vault/memory/.engine/index-vault.mjs', '--force'],
-        'index-vault.mjs --force',
+        ['vault/memory/.engine/launcher.mjs', 'index', '--force'],
+        'launcher.mjs index --force',
       );
       if (r.code !== 0) {
         console.log(red('  ✗ Re-index falló. Revisá el output arriba.'));
@@ -347,8 +347,8 @@ export async function actionMemoryReindexForce() {
   rl.pause();
   const result = await runChildCaptured(
     'node',
-    ['vault/memory/.engine/index-vault.mjs', '--force'],
-    'index-vault.mjs --force',
+    ['vault/memory/.engine/launcher.mjs', 'index', '--force'],
+    'launcher.mjs index --force',
   );
 
   if (result.code === 0) {
@@ -398,7 +398,7 @@ export async function actionMemoryReindexForce() {
     }
   } else {
     console.log('  ' + dim('  No reconozco el error. Probá manualmente para ver más detalle:'));
-    console.log('    ' + cyan('node vault/memory/.engine/index-vault.mjs --force'));
+    console.log('    ' + cyan('node vault/memory/.engine/launcher.mjs index --force'));
   }
 
   await pressEnterToContinue();

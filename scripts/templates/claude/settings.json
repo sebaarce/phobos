@@ -3,11 +3,8 @@
   "$comment": "Phobos para Claude Code — permission allowlist por defecto. Cubre las operaciones que los agentes (phobos, researcher, planner, programmer, tester, archivist) hacen constantemente, para que no veas un prompt 'Do you want to proceed?' en cada Bash. Mantenemos un denylist explícito para secretos (.env, *.pem, etc) que gana sobre cualquier allow. Si tu proyecto tiene paths sensibles distintos, agregalos al `deny` y reinstalá las settings.",
   "permissions": {
     "allow": [
-      "Bash(node vault/memory/.engine/search.mjs *)",
-      "Bash(node vault/memory/.engine/index-vault.mjs *)",
-      "Bash(node vault/memory/.engine/list-memory.mjs *)",
-      "Bash(node vault/memory/.engine/costs.mjs *)",
-      "Bash(node .codegraph/cg.cjs *)",
+      "Bash(node vault/memory/.engine/launcher.mjs *)",
+      "Bash(node .codegraph/launcher.mjs *)",
       "Bash(mkdir -p vault/*)",
       "Bash(mkdir -p vault/memory/*)",
       "Bash(date *)",

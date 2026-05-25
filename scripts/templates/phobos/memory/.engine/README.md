@@ -47,7 +47,7 @@ npx github:sebaarce/phobos
 The wizard:
 1. Detects Docker, Node, and `package.json`.
 2. Installs `@xenova/transformers` and `@qdrant/js-client-rest` with your package manager.
-3. Copies this engine to `vault/memory/.engine/`.
+3. Copies this engine to `~/.phobos/memory-engine/` (global, compartido entre proyectos).
 4. Creates `~/.phobos/docker-compose.qdrant.yml` (shared by all your Phobos projects).
 5. Starts the global Qdrant container if not already running.
 6. Indexes your vault into a project-specific collection.
@@ -69,7 +69,7 @@ docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d
 #   "collection": "phobos-vault-<your-project-slug>"
 
 # index
-node vault/memory/.engine/index-vault.mjs
+node vault/memory/.engine/launcher.mjs index
 ```
 
 ## Global Qdrant model
@@ -102,25 +102,25 @@ docker compose -f ~/.phobos/docker-compose.qdrant.yml up -d
 **Search from the shell**:
 
 ```bash
-node vault/memory/.engine/search.mjs "jwt refresh token rotation" --top 5
+node vault/memory/.engine/launcher.mjs search "jwt refresh token rotation" --top 5
 ```
 
 **Search and get JSON for tooling**:
 
 ```bash
-node vault/memory/.engine/search.mjs "jwt refresh" --json
+node vault/memory/.engine/launcher.mjs search "jwt refresh" --json
 ```
 
 **Re-index after editing notes manually**:
 
 ```bash
-node vault/memory/.engine/index-vault.mjs --incremental
+node vault/memory/.engine/launcher.mjs index --incremental
 ```
 
 **Force full re-index** (e.g., after changing the model):
 
 ```bash
-node vault/memory/.engine/index-vault.mjs --force
+node vault/memory/.engine/launcher.mjs index --force
 ```
 
 ## Configuration

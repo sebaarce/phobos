@@ -30,13 +30,13 @@ permission:
     "Get-Date*": allow
     # CodeGraph — install aislado en .codegraph/ (NO en node_modules raíz).
     # CI/CD no lo baja porque NO está en el package.json principal. El wizard
-    # genera un shim estable en .codegraph/cg.cjs que carga el binario real
+    # genera un shim estable en .codegraph/launcher.mjs que carga el binario real
     # vía require() — esto bypassea las diferencias entre pnpm/npm/yarn (pnpm
     # con node-linker isolated a veces no crea .bin/codegraph). Solo read-only;
     # init/index/sync los corre el usuario vía wizard.
-    "node .codegraph/cg.cjs query*": allow
-    "node .codegraph/cg.cjs affected*": allow
-    "node .codegraph/cg.cjs --help*": allow
+    "node .codegraph/launcher.mjs query*": allow
+    "node .codegraph/launcher.mjs affected*": allow
+    "node .codegraph/launcher.mjs --help*": allow
 security:
   slug_regex: "^[a-zA-Z0-9_-]{3,60}$"
   forbidden_paths:
@@ -113,7 +113,7 @@ Phobos te pasa **uno** de estos dos paths como destino del research:
 ### Tu primer call obligatorio (regla simple)
 
 ```bash
-node .codegraph/cg.cjs query "<keywords del tema, en inglés o lenguaje natural>"
+node .codegraph/launcher.mjs query "<keywords del tema, en inglés o lenguaje natural>"
 ```
 
 `query` es el subcomando universal de CodeGraph. Acepta texto libre y devuelve archivos/símbolos/imports relevantes con scoring de relevancia. **Sirve para todo**: localizar módulos, encontrar definiciones, buscar callers, identificar imports.
@@ -122,12 +122,12 @@ Ejemplos concretos:
 
 | Pregunta del usuario | Primer call OBLIGATORIO |
 |----------------------|--------------------------|
-| Investigá el flujo de selección de método de pago | `node .codegraph/cg.cjs query "payment method selection"` |
-| ¿Dónde está el módulo de usuarios? | `node .codegraph/cg.cjs query "users module"` |
-| ¿Cómo funciona el rate limiting? | `node .codegraph/cg.cjs query "rate limit"` |
-| ¿Dónde se hace la autenticación? | `node .codegraph/cg.cjs query "authentication"` |
-| ¿Quién llama a `createSubscription`? | `node .codegraph/cg.cjs query "createSubscription"` |
-| ¿Dónde se define `User`? | `node .codegraph/cg.cjs query "class User definition"` |
+| Investigá el flujo de selección de método de pago | `node .codegraph/launcher.mjs query "payment method selection"` |
+| ¿Dónde está el módulo de usuarios? | `node .codegraph/launcher.mjs query "users module"` |
+| ¿Cómo funciona el rate limiting? | `node .codegraph/launcher.mjs query "rate limit"` |
+| ¿Dónde se hace la autenticación? | `node .codegraph/launcher.mjs query "authentication"` |
+| ¿Quién llama a `createSubscription`? | `node .codegraph/launcher.mjs query "createSubscription"` |
+| ¿Dónde se define `User`? | `node .codegraph/launcher.mjs query "class User definition"` |
 
 ### Subcomandos disponibles
 
@@ -150,7 +150,7 @@ Tres ramas posibles:
 3. **CodeGraph falló** con cualquiera de estas salidas:
    - `Cannot find module '@colbymchenry/codegraph/package.json'`
    - `MODULE_NOT_FOUND`
-   - `Cannot find module '...codegraph/cg.cjs'`
+   - `Cannot find module '...codegraph/launcher.mjs'`
    - `Error: ENOENT` apuntando a `.codegraph/`
    - exit code distinto de 0
 
@@ -168,7 +168,7 @@ Podés arrancar con `rg` SIN intentar CodeGraph **solo si** la pregunta es sobre
 
 ### Install model (contexto técnico, no para invocar)
 
-CodeGraph vive en `.codegraph/` aislado, con su propio `node_modules/`. El usuario lo instala vía `phobos → Instalar herramientas → CodeGraph`. **NO uses `npx codegraph` ni `pnpm exec codegraph`** — esos buscan en otros paths. La invocación correcta es siempre `node .codegraph/cg.cjs <subcommand>`.
+CodeGraph vive en `.codegraph/` aislado, con su propio `node_modules/`. El usuario lo instala vía `phobos → Instalar herramientas → CodeGraph`. **NO uses `npx codegraph` ni `pnpm exec codegraph`** — esos buscan en otros paths. La invocación correcta es siempre `node .codegraph/launcher.mjs <subcommand>`.
 
 ### Violaciones automáticas del contrato
 
@@ -184,7 +184,7 @@ Si tu primer tool call sobre código (después del README de la task) es alguno 
 
 - ❌ *"La pregunta no es 'estructural', es 'exploratoria' / 'general' / 'sobre un flujo'."* → No. Toda pregunta sobre código arranca con CodeGraph.
 - ❌ *"Sé que `grep` me va a dar más control."* → No. Probá CodeGraph primero; si los resultados son pobres, drillás después.
-- ❌ *"Es un proyecto chico, no hace falta."* → No. La regla aplica a todo proyecto donde `.codegraph/cg.cjs` exista (el comando mismo te lo dice).
+- ❌ *"Es un proyecto chico, no hace falta."* → No. La regla aplica a todo proyecto donde `.codegraph/launcher.mjs` exista (el comando mismo te lo dice).
 - ❌ *"Ya conozco el módulo donde está, voy directo al Read."* → No. CodeGraph confirma o desambigua tu hipótesis en 1 call.
 - ❌ Pre-detectar con `Test-Path`/`ls` antes de invocar CodeGraph. Es ruido — invocá CodeGraph directo; él te dice si está disponible.
 
@@ -197,13 +197,13 @@ Si tu primer tool call sobre código (después del README de la task) es alguno 
 **Before** writing `research.md`, check whether the project has the Phobos memory engine installed:
 
 ```bash
-ls vault/memory/.engine/search.mjs 2>/dev/null
+ls vault/memory/.engine/launcher.mjs 2>/dev/null
 ```
 
 If the file exists, **run a semantic search** with the task goal as the query:
 
 ```bash
-node vault/memory/.engine/search.mjs "<task goal in 1 sentence>" --top 3 --json
+node vault/memory/.engine/launcher.mjs search "<task goal in 1 sentence>" --top 3 --json
 ```
 
 Parse the JSON output (an array of `{score, filePath, sectionTitle, text}`). Use the results to populate the `## Previous insights` section of `research.md` (template below).
@@ -256,7 +256,7 @@ You write to `vault/memory/tasks/<slug>/research.md` (Phobos passes you the slug
 <one sentence with the task>
 
 ## Previous insights
-> Retrieved via `vault/memory/.engine/search.mjs`. Only chunks with similarity ≥ 0.7.
+> Retrieved via `vault/memory/.engine/launcher.mjs`. Only chunks with similarity ≥ 0.7.
 > Wikilinks point to the source notes in the vault.
 
 - **[[react-hook-form-zod]]** § Validation setup _(similarity 0.842)_

@@ -5,18 +5,34 @@
 // Read-only, no consulta Qdrant — solo filesystem.
 //
 // Uso:
-//   node vault/memory/.engine/list-memory.mjs                   # overview
-//   node vault/memory/.engine/list-memory.mjs --tasks 10        # más tareas
-//   node vault/memory/.engine/list-memory.mjs --json            # output JSON
-//   node vault/memory/.engine/list-memory.mjs --section insights  # solo una sección
+//   node vault/memory/.engine/launcher.mjs list                   # overview
+//   node vault/memory/.engine/launcher.mjs list --tasks 10        # más tareas
+//   node vault/memory/.engine/launcher.mjs list --json            # output JSON
+//   node vault/memory/.engine/launcher.mjs list --section insights  # solo una sección
 
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, '..', '..', '..');
+
+function parseProjectFlag(argv) {
+  const idx = argv.indexOf('--project');
+  if (idx >= 0 && argv[idx + 1]) {
+    const p = resolvePath(argv[idx + 1]);
+    argv.splice(idx, 2);
+    return p;
+  }
+  return null;
+}
+
+// `process.argv.slice(2)` se parsea de nuevo en parseArgs() abajo. Acá hacemos
+// una pasada temprana solo para extraer --project; el resto queda intacto.
+const _argv = process.argv.slice(2);
+const PROJECT_ROOT = parseProjectFlag(_argv) || join(__dirname, '..', '..', '..');
+// Reemplazo argv original (sin --project) para que parseArgs() abajo lo lea bien.
+process.argv = [process.argv[0], process.argv[1], ..._argv];
 
 const VAULT = {
   tasks:    join(PROJECT_ROOT, 'vault/memory/tasks'),
