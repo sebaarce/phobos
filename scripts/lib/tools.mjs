@@ -223,7 +223,7 @@ if (!entry) {
 require(join(pkgPath, '..', entry));
 `;
   await mkdir(CODEGRAPH_GLOBAL, { recursive: true });
-  await safeWriteFile(CODEGRAPH_SHIM_GLOBAL, shim, { allowedRoot: PHOBOS_HOME });
+  await safeWriteFile(CODEGRAPH_SHIM_GLOBAL, shim, { allowedRoot: CODEGRAPH_GLOBAL });
 }
 
 // Crea el manifest global (<base>/codegraph/package.json).
@@ -241,7 +241,7 @@ async function ensureCodeGraphHostManifestGlobal() {
       [CODEGRAPH_PKG]: 'latest',
     },
   };
-  await safeWriteFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', { allowedRoot: PHOBOS_HOME });
+  await safeWriteFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', { allowedRoot: CODEGRAPH_GLOBAL });
   return { created: true };
 }
 
@@ -256,7 +256,7 @@ async function ensureCodeGraphNpmrcGlobal() {
     'shamefully-hoist=true',
     '',
   ].join('\n');
-  await safeWriteFile(npmrcPath, content, { allowedRoot: PHOBOS_HOME });
+  await safeWriteFile(npmrcPath, content, { allowedRoot: CODEGRAPH_GLOBAL });
   return { created: true };
 }
 

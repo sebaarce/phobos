@@ -183,7 +183,11 @@ export async function installMemoryEngineGlobalFiles() {
     }
     const content = await readFile(srcPath, 'utf-8');
     const dstPath = join(MEMORY_ENGINE_GLOBAL, file.dst);
-    await safeWriteFile(dstPath, content, { allowedRoot: PHOBOS_HOME });
+    // allowedRoot=MEMORY_ENGINE_GLOBAL (no PHOBOS_HOME) — si PHOBOS_HOME es un
+    // junction A→X y MEMORY_ENGINE_GLOBAL también es junction A→Y, la doble
+    // resolución haría que el target escape el primer root. Usamos el root
+    // propio del componente.
+    await safeWriteFile(dstPath, content, { allowedRoot: MEMORY_ENGINE_GLOBAL });
     console.log(dim('  · ') + cyan(dstPath));
   }
 }
