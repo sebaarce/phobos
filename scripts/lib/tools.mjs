@@ -560,8 +560,18 @@ export async function installCodeGraph() {
 }
 
 // Router para la entrada "CodeGraph" del menú principal.
+//
+// Envuelve `installCodeGraph` con un `pressEnterToContinue()` para que ningún
+// exit path (cancelación, install completo, error temprano) vuelva al menú
+// instantáneamente — sin la pausa, el main loop re-renderiza el menú apenas
+// retorna esto y el usuario ve un "parpadeo" sin entender qué pasó.
+//
+// El submenú "Instalar herramientas" ya hace su propio pressEnterToContinue
+// después de llamar a `installCodeGraph` (ver actionInstallTools abajo), por
+// eso ahí seguimos llamando a `installCodeGraph` directamente.
 export async function actionCodeGraph(_adapter) {
-  return installCodeGraph();
+  await installCodeGraph();
+  await pressEnterToContinue();
 }
 
 // ═══════════════════════════════════════════════════════════════════
