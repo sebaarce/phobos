@@ -29,7 +29,7 @@ import { yellow, cyan, green, dim, bold } from './lib/colors.mjs';
 import { clearScreen } from './lib/tui.mjs';
 import { printHeader, showHappyGoodbye, showSadGoodbye } from './lib/banners.mjs';
 import { WIZARD_CANCELLED, finalizeAndExit, runAction } from './lib/exit.mjs';
-import { tuiSelect } from './lib/tui.mjs';
+import { tuiSelect, tuiMultiSelect } from './lib/tui.mjs';
 import { ensureBootstrap } from './lib/bootstrap.mjs';
 import { scanForUpdates, actionUpdateAgents, actionUpdateAgentsMultiIDE } from './lib/update.mjs';
 import { actionSetModels, actionViewModels } from './lib/models.mjs';
@@ -388,58 +388,62 @@ process.on('SIGINT', () => {
   finalizeAndExit(130);
 });
 
-// Selección de target IDE. Para cada adapter implementado, instancia y devuelve.
-// Para stubs (isImplemented = false), muestra "próximamente, en desarrollo" y
-// devuelve null para que main() cierre limpio.
-async function selectTarget() {
+// Selección de target IDE(s). Multi-select — el usuario puede instalar Phobos
+// para uno o más IDEs en simultáneo. Devuelve array de adapters implementados.
+// Si el usuario cancela o no marca ninguno, devuelve [].
+//
+// Adapters no implementados (isImplemented = false) NO aparecen en el checkbox;
+// si solo hay no-implementados disponibles, mostramos un disclaimer y salimos.
+async function selectTargets() {
   // Adapters disponibles. Orden = orden en que aparecen en el menú.
-  // Para agregar un IDE nuevo: importar el adapter y agregarlo a esta lista.
   const adapters = [
     new OpencodeAdapter(),
     new ClaudeAdapter(),
   ];
 
-  const options = adapters.map(a => {
-    const suffix = a.isImplemented ? '' : dim('   (próximamente)');
-    return `Instalar para ${a.displayName}${suffix}`;
-  });
-  options.push(dim('Salir'));
+  const implemented = adapters.filter(a => a.isImplemented);
+  const notImplemented = adapters.filter(a => !a.isImplemented);
 
-  let choice;
+  // Caso degenerado: no hay ningún adapter implementado.
+  if (implemented.length === 0) {
+    console.log('');
+    console.log('  ' + yellow('No hay IDEs implementados disponibles todavía.'));
+    if (notImplemented.length) {
+      console.log('  ' + dim('Próximamente: ') + notImplemented.map(a => a.displayName).join(', '));
+    }
+    console.log('');
+    return [];
+  }
+
+  const options = implemented.map(a => ({
+    value: a.id,
+    label: `Instalar para ${a.displayName}`,
+  }));
+
+  // Hint adicional si hay adapters en roadmap pero todavía sin implementar.
+  if (notImplemented.length) {
+    console.log('');
+    console.log(dim('  Próximamente (no en checkbox todavía): ') + notImplemented.map(a => a.displayName).join(', '));
+  }
+
+  let selectedIds;
   try {
-    choice = await tuiSelect(
-      '\n¿Para qué IDE configurás Phobos?',
+    selectedIds = await tuiMultiSelect(
+      '\n¿Para qué IDE(s) configurás Phobos? (Espacio = marcar, Enter = confirmar)',
       options,
-      0,
+      [implemented[0].id], // default: primero marcado
     );
   } catch (err) {
-    if (err === WIZARD_CANCELLED) return null;
+    if (err === WIZARD_CANCELLED) return [];
     throw err;
   }
 
-  const { index } = choice;
-  if (index === adapters.length) return null; // "Salir"
-
-  const adapter = adapters[index];
-  if (!adapter.isImplemented) {
-    clearScreen();
-    printHeader();
-    console.log('');
-    console.log('  ' + cyan('▸ ') + 'Phobos para ' + adapter.displayName);
-    console.log('');
-    console.log('  ' + yellow('Próximamente — en desarrollo.'));
-    console.log('');
-    console.log(dim('  La integración con ' + adapter.displayName + ' está en la roadmap pero todavía no'));
-    console.log(dim('  está implementada. Por ahora solo soportamos OpenCode.'));
-    console.log('');
-    console.log(dim('  Cuando esté lista, este wizard te va a permitir bootstrappear el mismo'));
-    console.log(dim('  flow SDD (Researcher / Planner / Programmer / Tester / Archivist) pero'));
-    console.log(dim('  contra ' + adapter.displayName + ' en lugar de OpenCode.'));
-    console.log('');
-    return null;
+  if (!selectedIds || selectedIds.length === 0) {
+    console.log(dim('  ⊘ No marcaste ningún IDE — salida.'));
+    return [];
   }
 
-  return adapter;
+  return implemented.filter(a => selectedIds.includes(a.id));
 }
 
 // Auto-detección: chequea cuál IDE ya está bootstrapped en este proyecto.
@@ -555,20 +559,49 @@ async function main() {
   let adapter = await detectInstalledAdapter();
 
   if (!adapter) {
-    // Nada instalado — primer arranque. Acá SÍ pedimos al usuario qué IDE.
-    adapter = await selectTarget();
-    if (!adapter) {
+    // Nada instalado — primer arranque. Multi-select de IDEs (uno o varios).
+    const targets = await selectTargets();
+    if (targets.length === 0) {
       finalizeAndExit(0);
       return;
     }
 
-    // Bootstrap para el target elegido — ensureBootstrap recibe el adapter
-    // y usa adapter.bootstrapFiles() para saber qué copiar.
-    const bootstrapped = await ensureBootstrap(adapter);
-    if (!bootstrapped) {
+    // Bootstrap secuencial para cada IDE elegido. Cada uno tiene su confirm
+    // interno (¿Querés instalar Phobos para X?) — para multi-select esto da
+    // al user una segunda chance por IDE.
+    const bootstrappedAdapters = [];
+    for (const target of targets) {
+      if (targets.length > 1) {
+        console.log('');
+        console.log('  ' + cyan('▸ ') + bold(target.displayName));
+      }
+      const ok = await ensureBootstrap(target);
+      if (ok) {
+        bootstrappedAdapters.push(target);
+      } else {
+        console.log(dim('  ⊘ ' + target.displayName + ' saltado.'));
+      }
+    }
+
+    if (bootstrappedAdapters.length === 0) {
       showSadGoodbye();
       finalizeAndExit(0);
       return;
+    }
+
+    // Si se instalaron varios, el menú principal corre con el primero como
+    // adapter "activo". Las acciones del menú son IDE-agnostic en su mayoría
+    // (Memory, CodeGraph, Tools) — y las que NO lo son (Update agents, Models
+    // wizard) operan sobre el adapter activo. Si querés cambiar, salí y
+    // reabrí el wizard (detectInstalledAdapter ahora va a encontrar ambos).
+    adapter = bootstrappedAdapters[0];
+
+    if (bootstrappedAdapters.length > 1) {
+      console.log('');
+      console.log('  ' + green('✓ ') + 'Phobos instalado para: ' + bootstrappedAdapters.map(a => cyan(a.displayName)).join(dim(' + ')));
+      console.log('  ' + dim('  Menú principal corriendo sobre ') + cyan(adapter.displayName) +
+                  dim(' (las acciones IDE-specific aplican a este).'));
+      console.log('');
     }
   }
   // Caso "ya hay instalación": directo al menú principal con el adapter
