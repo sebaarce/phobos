@@ -238,27 +238,48 @@ export async function ensureLinkTo({ linkPath, targetPath, componentName }) {
     if (r.index === 0) return { action: 'noop', from: linkPath, to: curTarget };
     if (r.index === 2) throw new Error('Cancelado por el usuario');
 
-    // Migración entre dos targets externos
+    // Migración entre dos targets externos.
+    //
+    // Casos:
+    //   a) target NO existe              → rename (curTarget → target) en una sola op.
+    //   b) target existe vacío           → rmdir + rename.
+    //   c) target existe con contenido   → MERGE: mover cada hijo de curTarget
+    //      adentro de target, dejando intacto lo que ya hay (ej: codegraph\
+    //      del install previo). Si hay conflicto de nombre, error con detalle.
     await removeLinkOnly(linkPath);
-    await mkdir(parse(target).dir || target, { recursive: true });
+    await safeMkdirParent(target);
+
     if (await fileExists(target)) {
       const tInfo = await inspectPath(target);
-      if (!tInfo.isEmpty) {
-        throw new Error(`El destino ${target} no está vacío. Resolvé manualmente.`);
-      }
-      await rmdir(target);
-    }
-    try {
-      await rename(curTarget, target);
-    } catch (e) {
-      if (e.code === 'EXDEV' || e.code === 'EPERM') {
-        await mkdir(target, { recursive: true });
-        await copyDirRecursive(curTarget, target);
-        await rmrf(curTarget);
+      if (tInfo.isEmpty) {
+        await rmdir(target);
+        await moveOrCopy(curTarget, target);
       } else {
-        throw e;
+        // MERGE — mover hijos de curTarget adentro de target.
+        const { readdir: readdirFn } = await import('node:fs/promises');
+        const sourceChildren = await readdirFn(curTarget);
+        const conflicts = sourceChildren.filter(name => existsSync(join(target, name)));
+        if (conflicts.length > 0) {
+          // Restablecer el link al estado previo para no dejar al user sin acceso.
+          await createLink(linkPath, curTarget).catch(() => {});
+          throw new Error(
+            `No puedo mergear: estos nombres ya existen en ${target}: ${conflicts.join(', ')}. ` +
+            `Resolvé manualmente moviendo o eliminando esos archivos del destino, después reintentá.`,
+          );
+        }
+        for (const name of sourceChildren) {
+          await moveOrCopy(join(curTarget, name), join(target, name));
+        }
+        // Limpiar el curTarget que ya está vacío.
+        try { await rmdir(curTarget); } catch {}
+        console.log('  ' + green('✓ ') + dim('Datos mergeados a ') + cyan(target) + dim(' + junction creado'));
+        await createLink(linkPath, target);
+        return { action: 'migrated', from: linkPath, to: target };
       }
+    } else {
+      await moveOrCopy(curTarget, target);
     }
+
     await createLink(linkPath, target);
     console.log('  ' + green('✓ ') + dim('Datos migrados a ') + cyan(target) + dim(' + junction creado'));
     return { action: 'migrated', from: linkPath, to: target };
@@ -283,9 +304,8 @@ export async function ensureLinkTo({ linkPath, targetPath, componentName }) {
         `  Movelo manualmente a ${target}, borrá ${linkPath}, y reintentá.`,
       );
     }
-    // Crear padre del target
-    const targetParent = parse(target).dir;
-    if (targetParent) await mkdir(targetParent, { recursive: true });
+    // Crear padre del target (skip si es root del drive — Windows tira EPERM).
+    await safeMkdirParent(target);
 
     if (await fileExists(target)) {
       const tInfo = await inspectPath(target);
@@ -333,6 +353,73 @@ export function printVerificationCommands(componentName, linkPath, targetPath = 
     console.log('    ' + cyan(`ls -la "${linkPath}"`));
     if (targetPath) {
       console.log('    ' + cyan(`ls -la "${targetPath}"`));
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Uninstall helpers
+// ═══════════════════════════════════════════════════════════════════
+
+// Rompe el junction `linkPath` SI su target está vacío (o no existe).
+// Si el target tiene contenido, NO rompe — devuelve la lista de hijos para
+// que el caller informe al user.
+//
+// Devuelve:
+//   { broken: true, target: '...' }
+//   { broken: false, reason: 'not-a-link', linkPath: ... }
+//   { broken: false, reason: 'target-not-empty', target: '...', remaining: [...] }
+//
+// NO toca el target si tiene contenido — el caller decide qué hacer.
+// El `linkPath` (el junction file) sí se borra si target está vacío.
+export async function breakJunctionIfEmpty(linkPath) {
+  const info = await inspectPath(linkPath);
+  if (!info.exists || !info.isLink) {
+    return { broken: false, reason: 'not-a-link', linkPath };
+  }
+  const target = info.target;
+  if (info.isEmpty) {
+    // Borrar el target dir si existe
+    if (target && existsSync(target)) {
+      try { await rmdir(target); } catch {}
+    }
+    await removeLinkOnly(linkPath);
+    return { broken: true, target };
+  }
+  // Target con contenido — listarlo para que el caller informe
+  const { readdir: readdirFn } = await import('node:fs/promises');
+  let remaining = [];
+  try { remaining = await readdirFn(linkPath); } catch {}
+  return { broken: false, reason: 'target-not-empty', target, remaining };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Helpers internos (no exportados)
+// ═══════════════════════════════════════════════════════════════════
+
+// mkdir del parent de `p` si el parent NO es la raíz del drive.
+// En Windows, `mkdir 'E:\'` tira EPERM aunque ya exista — la raíz del drive
+// no se puede "crear". Sólo creamos el parent si es un subdirectorio.
+async function safeMkdirParent(p) {
+  const parent = parse(p).dir;
+  if (!parent) return;
+  const parsed = parse(parent);
+  const isDriveRoot = parsed.root === parent;
+  if (isDriveRoot) return;
+  await mkdir(parent, { recursive: true });
+}
+
+// rename si están en el mismo volumen; sino copy + delete.
+async function moveOrCopy(src, dst) {
+  try {
+    await rename(src, dst);
+  } catch (e) {
+    if (e.code === 'EXDEV' || e.code === 'EPERM') {
+      await mkdir(dst, { recursive: true });
+      await copyDirRecursive(src, dst);
+      await rmrf(src);
+    } else {
+      throw e;
     }
   }
 }

@@ -19,6 +19,7 @@ import { getProjectActiveCollection } from './collection.mjs';
 import { actionInspectQdrant, diagnoseMemoryFailure } from './inspect.mjs';
 import { actionInstallMemory } from './install.mjs';
 import { actionResetQdrant } from './reset.mjs';
+import { actionUninstallMemory } from './uninstall.mjs';
 
 const CONFIG_PATH = 'vault/memory/.engine/config.json';
 
@@ -86,6 +87,7 @@ export async function actionMemory(adapter) {
           'Set / Rename Collection ' + dim('(cambiar a qué collection apunta este proyecto)'),
           'Reset Qdrant global ' + dim('(destructivo · borra storage de TODOS los proyectos · backup opcional)'),
           'Re-instalar engine en este proyecto ' + dim('(sobreescribe vault/memory/.engine/ con templates frescos)'),
+          'Desinstalar Memory ' + dim('(per-proyecto / global / completo)'),
           dim('← Volver al menú principal'),
         ],
         0,
@@ -95,7 +97,7 @@ export async function actionMemory(adapter) {
       throw err;
     }
 
-    if (choice.index === 5) return;
+    if (choice.index === 6) return;
     if (choice.index === 0) {
       await runAction(() => actionInspectQdrant(adapter));
     } else if (choice.index === 1) {
@@ -106,6 +108,8 @@ export async function actionMemory(adapter) {
       await runAction(() => actionResetQdrant());
     } else if (choice.index === 4) {
       await runAction(() => actionInstallMemory(adapter));
+    } else if (choice.index === 5) {
+      await runAction(() => actionUninstallMemory());
     }
   }
 }

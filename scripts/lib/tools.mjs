@@ -391,11 +391,12 @@ export async function installCodeGraph() {
       [
         'Re-indexar (recomendado si el código cambió mucho)',
         'Re-instalar el paquete global (forzar actualización)',
+        'Desinstalar ' + dim('(per-proyecto / global / completo)'),
         'Cancelar',
       ],
       0,
     );
-    if (index === 2) {
+    if (index === 3) {
       console.log(dim('  ⊘ saltado.\n'));
       return;
     }
@@ -409,12 +410,30 @@ export async function installCodeGraph() {
       }
       return;
     }
+    if (index === 2) {
+      await uninstallCodeGraph();
+      return;
+    }
     // index === 1: continúa al flujo normal (reinstala el paquete global).
   } else if (status.pkgInstalled && !status.dbBuilt && inProject) {
     console.log(dim('  ℹ Paquete global instalado pero sin indexar todavía. Voy a configurar el proyecto + indexar.\n'));
   } else if (status.pkgInstalled && !inProject) {
-    console.log(dim('  ℹ Paquete global ya instalado. Sin proyecto activo, no hay más que hacer.\n'));
-    return;
+    // Global ya instalado, sin proyecto activo. Ofrecer re-install / uninstall.
+    const { index } = await tuiSelect(
+      'CodeGraph global ya está instalado. Sin proyecto en cwd, no hay configuración local que hacer.',
+      [
+        'Re-instalar el paquete global (forzar actualización)',
+        'Desinstalar ' + dim('(global completo)'),
+        'Cancelar',
+      ],
+      2,
+    );
+    if (index === 2) return;
+    if (index === 1) {
+      await uninstallCodeGraph();
+      return;
+    }
+    // index === 0: cae al flujo normal y reinstala.
   } else {
     const promptMsg = inProject
       ? '¿Instalar CodeGraph (global) y configurar este proyecto?'
@@ -605,6 +624,224 @@ export async function installCodeGraph() {
 export async function actionCodeGraph(_adapter) {
   await installCodeGraph();
   await pressEnterToContinue();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Uninstall de CodeGraph.
+//
+// Tres niveles:
+//   1. Per-proyecto    → borra .codegraph/* y limpia .gitignore.
+//   2. Solo global     → borra ~/.phobos/codegraph/ (deja per-proyecto orphan).
+//   3. Completo        → 1 + 2. Si ~/.phobos queda vacío, rompe el junction.
+// ═══════════════════════════════════════════════════════════════════
+
+const CODEGRAPH_PROJECT_FILES = [
+  '.codegraph/launcher.mjs',
+  '.codegraph/config.json',
+  '.codegraph/config.yaml',
+  '.codegraph/codegraph.db',
+  '.codegraph/.index-state.json',
+  '.codegraph/cg.cjs',          // legacy shim
+  '.codegraph/package.json',    // legacy manifest
+  '.codegraph/.npmrc',          // legacy npmrc
+];
+
+async function previewCodeGraphProject() {
+  const items = [];
+  for (const f of CODEGRAPH_PROJECT_FILES) {
+    if (await fileExists(f)) {
+      const { stat } = await import('node:fs/promises');
+      try {
+        const s = await stat(f);
+        items.push({ path: f, type: 'file', size: s.size });
+      } catch {}
+    }
+  }
+  if (await fileExists('.codegraph/node_modules')) {
+    const { getDirSize } = await import('./fs-utils.mjs');
+    items.push({ path: '.codegraph/node_modules/', type: 'dir', size: await getDirSize('.codegraph/node_modules') });
+  }
+  return items;
+}
+
+async function previewCodeGraphGlobal() {
+  const items = [];
+  if (await fileExists(CODEGRAPH_GLOBAL)) {
+    const { getDirSize } = await import('./fs-utils.mjs');
+    items.push({ path: CODEGRAPH_GLOBAL + '/', type: 'dir', size: await getDirSize(CODEGRAPH_GLOBAL) });
+  }
+  return items;
+}
+
+async function uninstallCodeGraphProjectFiles() {
+  const removed = [];
+  for (const f of CODEGRAPH_PROJECT_FILES) {
+    if (await fileExists(f)) {
+      await rmrf(f);
+      removed.push(f);
+    }
+  }
+  if (await fileExists('.codegraph/node_modules')) {
+    await rmrf('.codegraph/node_modules');
+    removed.push('.codegraph/node_modules/');
+  }
+  // Si .codegraph/ quedó vacío, removerlo también
+  if (await fileExists('.codegraph')) {
+    const { readdir } = await import('node:fs/promises');
+    try {
+      const left = await readdir('.codegraph');
+      if (left.length === 0) {
+        await rmrf('.codegraph');
+        removed.push('.codegraph/ (dir vacío)');
+      }
+    } catch {}
+  }
+  return removed;
+}
+
+async function cleanCodeGraphGitignoreEntries() {
+  const { readFile } = await import('node:fs/promises');
+  const gitignorePath = join(cwd(), '.gitignore');
+  if (!await fileExists(gitignorePath)) return { cleaned: false };
+  const content = await readFile(gitignorePath, 'utf-8');
+
+  const patterns = [
+    /^# CodeGraph.*$\r?\n/gm,
+    /^# Phobos CodeGraph.*$\r?\n/gm,
+    /^\.codegraph\/?\r?\n/gm,
+    /^\.codegraph\/\*\r?\n/gm,
+    /^!\.codegraph\/launcher\.mjs\r?\n/gm,
+  ];
+  let cleaned = content;
+  for (const p of patterns) cleaned = cleaned.replace(p, '');
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  if (cleaned === content) return { cleaned: false };
+  await safeWriteFile('.gitignore', cleaned);
+  return { cleaned: true };
+}
+
+async function uninstallCodeGraphGlobalFiles() {
+  const removed = [];
+  if (await fileExists(CODEGRAPH_GLOBAL)) {
+    await rmrf(CODEGRAPH_GLOBAL);
+    removed.push(CODEGRAPH_GLOBAL + '/');
+  }
+  return removed;
+}
+
+export async function uninstallCodeGraph() {
+  // Import lazy de breakJunctionIfEmpty para no engordar el top-level
+  const { breakJunctionIfEmpty } = await import('./storage.mjs');
+  const { getDirSize, formatBytes: fmtBytes } = await import('./fs-utils.mjs');
+
+  console.log('\n' + cyan('▸ ') + bold('Desinstalar CodeGraph'));
+  console.log('');
+
+  const projectItems = await previewCodeGraphProject();
+  const globalItems = await previewCodeGraphGlobal();
+
+  if (projectItems.length === 0 && globalItems.length === 0) {
+    console.log(dim('  ℹ No detecté nada de CodeGraph para desinstalar (ni global ni en este proyecto).\n'));
+    return;
+  }
+
+  const projectSize = projectItems.reduce((s, i) => s + (i.size || 0), 0);
+  const globalSize = globalItems.reduce((s, i) => s + (i.size || 0), 0);
+
+  console.log(dim('  Detectado en este proyecto:'));
+  if (projectItems.length === 0) {
+    console.log('    ' + dim('(nada)'));
+  } else {
+    for (const i of projectItems) {
+      console.log('    ' + cyan(i.path) + dim(' · ' + fmtBytes(i.size || 0)));
+    }
+  }
+  console.log('');
+  console.log(dim('  Detectado global:'));
+  if (globalItems.length === 0) {
+    console.log('    ' + dim('(nada)'));
+  } else {
+    for (const i of globalItems) {
+      console.log('    ' + cyan(i.path) + dim(' · ' + fmtBytes(i.size || 0)));
+    }
+    console.log('    ' + yellow('⚠ ') + dim('borrar global afecta a TODOS los proyectos que usan este install.'));
+  }
+  console.log('');
+
+  const options = [];
+  const handlers = [];
+  if (projectItems.length > 0) {
+    options.push(`Solo per-proyecto ${dim('(' + fmtBytes(projectSize) + ')')}`);
+    handlers.push('project');
+  }
+  if (globalItems.length > 0) {
+    options.push(`Solo global ${dim('(' + fmtBytes(globalSize) + ' · afecta otros proyectos)')}`);
+    handlers.push('global');
+  }
+  if (projectItems.length > 0 && globalItems.length > 0) {
+    options.push(`Completo ${dim('(per-proyecto + global + romper junction si queda vacío · ' + fmtBytes(projectSize + globalSize) + ')')}`);
+    handlers.push('complete');
+  }
+  options.push('Cancelar');
+  handlers.push('cancel');
+
+  let choice;
+  try {
+    choice = await tuiSelect('¿Qué nivel?', options, options.length - 1);
+  } catch {
+    return;
+  }
+  const level = handlers[choice.index];
+  if (level === 'cancel') {
+    console.log(dim('  ⊘ Cancelado.\n'));
+    return;
+  }
+
+  let confirmMsg;
+  if (level === 'project') confirmMsg = '¿Confirmás borrar SOLO los archivos de este proyecto?';
+  else if (level === 'global') confirmMsg = yellow('⚠ Esto deja sin binario a TODOS los proyectos. ¿Confirmás?');
+  else confirmMsg = yellow('⚠ Esto borra todo (proyecto + global). ¿Confirmás?');
+
+  const confirm = await tuiYesNo('\n' + confirmMsg, false);
+  if (!confirm) {
+    console.log(dim('  ⊘ Cancelado.\n'));
+    return;
+  }
+
+  console.log('');
+  if (level === 'project' || level === 'complete') {
+    console.log(cyan('▸ Borrando archivos del proyecto...'));
+    const removed = await uninstallCodeGraphProjectFiles();
+    for (const r of removed) console.log(green('  ✓ ') + dim('borrado: ') + r);
+    const gi = await cleanCodeGraphGitignoreEntries();
+    if (gi.cleaned) console.log(green('  ✓ ') + dim('.gitignore: removí entradas de CodeGraph'));
+  }
+  if (level === 'global' || level === 'complete') {
+    console.log('');
+    console.log(cyan('▸ Borrando install global...'));
+    const removed = await uninstallCodeGraphGlobalFiles();
+    for (const r of removed) console.log(green('  ✓ ') + dim('borrado: ') + r);
+  }
+
+  if (level === 'complete') {
+    console.log('');
+    const r = await breakJunctionIfEmpty(PHOBOS_HOME);
+    if (r.broken) {
+      console.log(green('  ✓ ') + dim('Junction roto: ') + cyan(PHOBOS_HOME) + dim(' (apuntaba a ') + r.target + dim(')'));
+    } else if (r.reason === 'target-not-empty') {
+      console.log(yellow('  ⚠ Mantengo el junction ') + cyan(PHOBOS_HOME) + dim(' — todavía hay contenido:'));
+      for (const name of r.remaining.slice(0, 5)) console.log('      ' + dim(name));
+      if (r.remaining.length > 5) console.log('      ' + dim('  … y ' + (r.remaining.length - 5) + ' más'));
+      if (r.remaining.includes('memory-engine') || r.remaining.includes('qdrant-storage')) {
+        console.log('  ' + dim('  Tip: para llegar a estado virgen, después corré "Desinstalar Memory (Completo)".'));
+      }
+    }
+  }
+
+  console.log('');
+  console.log(green('  ✓ CodeGraph desinstalado.'));
+  console.log('');
 }
 
 // ═══════════════════════════════════════════════════════════════════
