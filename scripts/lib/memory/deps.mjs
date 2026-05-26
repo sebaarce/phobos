@@ -8,7 +8,6 @@
 // vault/memory/.engine/.
 
 import { join } from 'node:path';
-import { platform } from 'node:process';
 import { fileExists, tryExec } from '../fs-utils.mjs';
 import { rl } from '../runtime.mjs';
 import { cyan, dim, bold, green, yellow, red } from '../colors.mjs';
@@ -17,8 +16,15 @@ import { runChild } from '../child.mjs';
 import { MEMORY_ENGINE_GLOBAL } from '../globals.mjs';
 
 export function checkCommand(cmd) {
-  const r = tryExec(platform === 'win32' ? `where ${cmd}` : `command -v ${cmd}`, 3000);
-  return r.ok && r.out.trim().length > 0;
+  // Probamos invocar el binario con --version (estándar para CLIs como docker,
+  // node, npm, etc). Más confiable que `where ${cmd}` en Windows porque:
+  //   1. No depende de quirks de PATH lookup (cmd.exe a veces retorna distinto
+  //      según si Docker Desktop está iniciado o no — falsos negativos).
+  //   2. Prueba que el binario es REALMENTE invocable, no solo que existe.
+  //   3. Timeout más generoso (5s) para tolerar Docker Desktop arrancando.
+  // Si el binario no existe o no responde, execSync tira y devolvemos false.
+  const r = tryExec(`${cmd} --version`, 5000);
+  return r.ok;
 }
 
 export async function detectPackageManager() {
