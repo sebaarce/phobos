@@ -161,6 +161,12 @@ async function getMainMenuState(agentDir, adapter) {
     codeGraph = { pkgInstalled: false, dbBuilt: false };
   }
 
+  // ¿El cwd es un proyecto? Mismo criterio que installCodeGraph.
+  // Usado por el label de CodeGraph para distinguir "sin proyecto" de "sin DB".
+  const inProject = await fileExists('.git')
+    || await fileExists('package.json')
+    || await fileExists('AGENTS.md');
+
   return {
     installedIDEs,
     activeIDE: adapter.displayName,
@@ -169,6 +175,7 @@ async function getMainMenuState(agentDir, adapter) {
     memoryInstalled,
     qdrantRunning,
     codeGraph,
+    inProject,
   };
 }
 
@@ -185,15 +192,21 @@ async function runMainMenu(agentDir, adapter) {
       ? 'Memory (RAG)            ' + dim('(instalado · reindex / reset / re-instalar)')
       : 'Memory (RAG)            ' + dim('(instalar engine de búsqueda semántica)');
 
-    // CodeGraph label — paralelo a Memory.
+    // CodeGraph label — distingue 4 estados:
+    //   · no instalado global              → "instalar..."
+    //   · instalado global, sin proyecto   → "global OK · entrá a un repo para configurar"
+    //   · instalado global, en proyecto sin DB → "falta configurar este proyecto"
+    //   · instalado global, en proyecto con DB → "instalado · re-indexar / re-instalar / desinstalar"
     const cg = state.codeGraph || {};
     let codeGraphLabel;
     if (!cg.pkgInstalled) {
       codeGraphLabel = 'CodeGraph               ' + dim('(instalar índice semántico del código)');
+    } else if (!state.inProject) {
+      codeGraphLabel = 'CodeGraph               ' + dim('(global instalado · entrá a un repo para configurar)');
     } else if (!cg.dbBuilt) {
-      codeGraphLabel = 'CodeGraph               ' + dim('(paquete instalado · falta indexar)');
+      codeGraphLabel = 'CodeGraph               ' + dim('(global OK · falta configurar este proyecto)');
     } else {
-      codeGraphLabel = 'CodeGraph               ' + dim('(instalado · re-indexar / re-instalar)');
+      codeGraphLabel = 'CodeGraph               ' + dim('(instalado · re-indexar / re-instalar / desinstalar)');
     }
 
     // "Instalar Phobos para..." — entry point del wizard. Lista todos los IDE

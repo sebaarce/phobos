@@ -472,25 +472,36 @@ export async function installCodeGraph() {
   } // ← fin del if (inProject) para legacy detection
 
   // ─── Step: Storage location prompt ──────────────────────────────────
-  console.log('');
-  const storage = await promptStorageDisk({
-    componentName: 'CodeGraph (node_modules + binario)',
-    defaultLabel: `${CODEGRAPH_GLOBAL} (default — disco del home)`,
-    suggestedSubdir: 'phobos\\codegraph',
-  });
+  //
+  // Lo salteamos si ya existe el global instalado (status.pkgInstalled). En
+  // ese caso estamos en un re-install / refresh — la ubicación ya está
+  // configurada (junction o real), no tiene sentido re-preguntar disco.
+  // Para CAMBIAR la ubicación, el user tiene que desinstalar primero.
+  let storage = { mode: 'default', basePath: null };
+  if (!status.pkgInstalled) {
+    console.log('');
+    storage = await promptStorageDisk({
+      componentName: 'CodeGraph (node_modules + binario)',
+      defaultLabel: `${CODEGRAPH_GLOBAL} (default — disco del home)`,
+      suggestedSubdir: 'phobos\\codegraph',
+    });
 
-  if (storage.mode === 'custom') {
-    try {
-      await ensureLinkTo({
-        linkPath: CODEGRAPH_GLOBAL,
-        targetPath: storage.basePath,
-        componentName: 'CodeGraph global',
-      });
-    } catch (e) {
-      console.log(red('  ✗ ' + e.message));
-      console.log(dim('  Reintentá el install cuando lo resuelvas.\n'));
-      return;
+    if (storage.mode === 'custom') {
+      try {
+        await ensureLinkTo({
+          linkPath: CODEGRAPH_GLOBAL,
+          targetPath: storage.basePath,
+          componentName: 'CodeGraph global',
+        });
+      } catch (e) {
+        console.log(red('  ✗ ' + e.message));
+        console.log(dim('  Reintentá el install cuando lo resuelvas.\n'));
+        return;
+      }
     }
+  } else {
+    console.log(dim('  ℹ Ubicación global ya configurada (' + CODEGRAPH_GLOBAL + ') — salteo el prompt de disco.'));
+    console.log(dim('    Para mover la instalación a otro disco, primero desinstalá (Completo) y reinstalá.'));
   }
 
   // ─── Step: Crear manifest + .npmrc + shim globales ──────────────────
