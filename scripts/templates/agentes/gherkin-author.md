@@ -6,7 +6,10 @@ temperature: 0.1
 permission:
   edit:
     "*": deny
-    "vault/memory/tasks/*/plan.md": allow
+    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad — necesario
+    # en monorepos con .opencode/ en un subdir (OpenCode resuelve paths desde
+    # el git root, no desde .opencode/). Ver planner-hard.md para detalle.
+    "**/vault/memory/tasks/*/plan.md": allow
   bash:
     "*": deny
     "date*": allow
@@ -263,6 +266,28 @@ Don't draw the literal matrix, but think through it before writing `plan.md`.
 13. **If touching DOM rendering, HTML templating, or `dangerouslySetInnerHTML`**: did you add explicit XSS escape steps OR a Risks note? (See Security XSS sub-section.)
 
 If any answer is "no", **fix before returning**.
+
+## Verify-after-write (HARD RULE — defense against silent permission denials)
+
+After writing `plan.md`, you **MUST verify the write persisted** before reporting the file ref to Phobos. OpenCode may silently reject a write if the `permission.edit` pattern doesn't match the resolved path. Your tool call may return success even though nothing landed on disk.
+
+**Required verification step**, before composing your final report message:
+
+1. Run `Read` (or `cat` / `Get-Content`) on the exact path you wrote: `vault/memory/tasks/<slug>/plan.md`.
+2. Confirm the content matches what you intended to write (at minimum: the `# Plan — <slug>` header, the `## Acceptance Criteria (Gherkin)` section, and the trailing `<!-- Traceability: ... -->` line).
+3. **If the file does NOT exist or content is empty/wrong**: do NOT report success. Return to Phobos:
+
+```
+state: blocked
+reason: plan.md write was silently denied — file not found at expected path after write.
+details:
+  - expected_path: vault/memory/tasks/<slug>/plan.md
+  - permission_pattern: **/vault/memory/tasks/*/plan.md
+  - hint: si OpenCode resuelve paths desde el git root y vault vive en un subdir, el pattern debería matchear con `**/`. Verificá que esa parte esté en el template.
+suggestion: Phobos debería abortar el pipeline y pedirle al user que verifique los path patterns del agente.
+```
+
+The verify step is non-negotiable. A silent failure that pretends to succeed corrupts the entire downstream pipeline (programmer reads stale/missing plan.md, tester has nothing to validate against).
 
 ## Security
 

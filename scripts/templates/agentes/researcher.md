@@ -6,11 +6,15 @@ temperature: 0.1
 permission:
   edit:
     "*": deny
+    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad —
+    # necesario en monorepos con .opencode/ en un subdir (OpenCode resuelve
+    # paths desde el git root, no desde .opencode/). El `**` matchea cero o
+    # más segmentos: funciona igual si opencode corre desde el git root.
     # Formal SDD task — research como primer paso de un pipeline completo.
-    "vault/memory/tasks/*/research.md": allow
+    "**/vault/memory/tasks/*/research.md": allow
     # Quick research-only query — pregunta casual del usuario sin task wrap.
     # Phobos delega directo acá cuando hay cache miss en semantic search.
-    "vault/memory/research-queries/*.md": allow
+    "**/vault/memory/research-queries/*.md": allow
   bash:
     "*": deny
     "ls*": allow
@@ -540,6 +544,28 @@ node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv
 ```
 
 Do NOT use `node -e "..."` with double quotes — PowerShell interprets `${...}` as variable expansion and the script breaks.
+
+## Verify-after-write (HARD RULE — defense against silent permission denials)
+
+After writing `research.md` (or `research-queries/<auto-slug>.md` for quick mode), you **MUST verify the write persisted** before reporting success to Phobos. OpenCode may silently reject a write if the `permission.edit` pattern doesn't match the resolved path. Your tool call may return success even though nothing landed on disk.
+
+**Required verification step**:
+
+1. After the write, run `Read` (or `Test-Path` / `Get-Content`) on the exact path you wrote.
+2. Confirm the file exists and starts with the `# Research — <slug>` header (or the equivalent for research-queries mode).
+3. **If the file does NOT exist**: return to Phobos:
+
+```
+state: blocked
+reason: research.md write was silently denied — file not found at expected path after write.
+details:
+  - expected_path: <full path>
+  - permission_pattern: **/vault/memory/tasks/*/research.md (or **/vault/memory/research-queries/*.md)
+  - hint: si OpenCode resuelve paths desde el git root y vault vive en un subdir, los patterns deberían usar `**/`. Verificá el template.
+suggestion: Phobos debe abortar y pedir verificación de paths antes de seguir.
+```
+
+Sin esto, planner-hard recibe un archivo inexistente como "research.md" y la cadena falla río abajo de manera confusa.
 
 ## Security
 

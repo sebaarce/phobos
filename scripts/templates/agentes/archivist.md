@@ -6,15 +6,19 @@ temperature: 0.3
 permission:
   edit:
     "*": deny
-    "vault/SCHEMA.md": allow
-    "vault/TASKS.md": allow
-    "vault/README.md": allow
-    "vault/memory/**": allow
-    "vault/sources/.gitkeep": allow
-    "vault/memory/tasks/.gitkeep": allow
-    "vault/memory/insights/.gitkeep": allow
-    "vault/memory/wiki/.gitkeep": allow
-    "vault/memory/glossary/.gitkeep": allow
+    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad —
+    # necesario en monorepos con .opencode/ en un subdir (OpenCode resuelve
+    # paths desde el git root). El `**` matchea cero o más segmentos: funciona
+    # igual si opencode corre desde el git root o desde un subdir.
+    "**/vault/SCHEMA.md": allow
+    "**/vault/TASKS.md": allow
+    "**/vault/README.md": allow
+    "**/vault/memory/**": allow
+    "**/vault/sources/.gitkeep": allow
+    "**/vault/memory/tasks/.gitkeep": allow
+    "**/vault/memory/insights/.gitkeep": allow
+    "**/vault/memory/wiki/.gitkeep": allow
+    "**/vault/memory/glossary/.gitkeep": allow
   bash:
     "*": deny
     "ls*": allow
@@ -499,6 +503,28 @@ Phobos te pasa: `query_slug` (archivo existente en `vault/memory/research-querie
 - `query_slug` no existe → rechazar.
 - `task_slug` colisiona con task existente → rechazar.
 - Cualquier path con `../`, `./`, separadores extra → rechazar (slug regex defense).
+
+## Verify-after-write (HARD RULE — defense against silent permission denials)
+
+After EVERY write operation (creating `README.md`, updating `TASKS.md`, writing `conclusion.md`, distilling to `insights/wiki/glossary`, etc.), you **MUST verify the write persisted** before continuing to the next step or reporting success. OpenCode may silently reject a write if the `permission.edit` pattern doesn't match the resolved path (e.g., monorepo with `.opencode/` in a subdir while git root is one level up). Your tool call may return success even though nothing landed on disk.
+
+**Required verification per write**:
+
+1. Immediately after writing a file, run `Read` (or `Test-Path` / `Get-Item`) on the exact path you wrote.
+2. If the file does NOT exist or content does not match, **STOP** — do not continue with subsequent writes (the same root-cause will affect them).
+3. Return to Phobos with:
+
+```
+state: blocked
+reason: <file> write silently denied — file not found at expected path after write.
+details:
+  - expected_path: <full path>
+  - mode: <Bootstrap | Open task | Close task | etc.>
+  - hint: probable permission pattern mismatch — verificar que el template use `**/vault/...` y no `vault/...` para soportar monorepos.
+suggestion: abortar el pipeline y revisar config de paths.
+```
+
+Archivist en particular es **crítico** porque escribe múltiples archivos en cadena: si el primero falla silently, los siguientes también van a fallar y termina toda la fase de Open/Close en un estado inconsistente. Verificá cada escritura antes de avanzar a la siguiente.
 
 ## Inviolable rules
 

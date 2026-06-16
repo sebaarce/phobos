@@ -6,7 +6,12 @@ temperature: 0.2
 permission:
   edit:
     "*": deny
-    "vault/memory/tasks/*/requirements.md": allow
+    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad — necesario
+    # cuando OpenCode resuelve los path patterns desde el git root en monorepos
+    # con .opencode/ en un subdir (ej: git root en `payments-api/`, .opencode en
+    # `payments-api/payment-api/.opencode/`). Sin el `**/`, el pattern matchea
+    # solo `<git-root>/vault/...` y los writes a `<subdir>/vault/...` fallan silently.
+    "**/vault/memory/tasks/*/requirements.md": allow
   bash:
     "*": deny
     "date*": allow
@@ -231,6 +236,28 @@ When you reach `state='ready'` (or hit the round-3 cutoff), write to `vault/memo
 - **Out of scope is mandatory** — even if empty, write `- (ninguno explícito; el alcance es exactamente lo descripto arriba)`. The Programmer uses this to avoid scope creep.
 - **Q&A trail is mandatory** — copiá las preguntas/respuestas tal cual del delegation payload. Vital para auditoría futura.
 - **Asunciones con marker** son lo que el gate humano debe revisar primero — el archivo final tiene que hacerlas obvias.
+
+## Verify-after-write (HARD RULE — defense against silent permission denials)
+
+After writing `requirements.md`, you **MUST verify the write persisted** before reporting `state='ready'` to Phobos. OpenCode may silently reject a write if the `permission.edit` pattern doesn't match the resolved path (e.g., monorepo with mismatched anchor) and your tool call returns success even though nothing landed on disk.
+
+**Required verification step**, before composing your "state: ready" response:
+
+1. Run `Read` (or `cat` / `Get-Content`) on the exact path you wrote: `vault/memory/tasks/<slug>/requirements.md`.
+2. Confirm the content matches what you intended to write (compare at least the `# Requirements — <slug>` header and the last `<!-- Traceability: ... -->` line).
+3. **If the file does NOT exist or content is empty/wrong**: do NOT report `state='ready'`. Instead, return to Phobos:
+
+```
+state: blocked
+reason: requirements.md write was silently denied — file not found at expected path after write.
+details:
+  - expected_path: vault/memory/tasks/<slug>/requirements.md
+  - permission_pattern: **/vault/memory/tasks/*/requirements.md
+  - hint: si OpenCode resuelve paths desde el git root y vault vive en un subdir, el pattern debería matchear con `**/`. Verificá que esa parte esté en el template.
+suggestion: Phobos debería abortar el pipeline y pedirle al user que verifique los path patterns del agente.
+```
+
+The verify step is non-negotiable. A silent failure that pretends to succeed is worse than a loud failure.
 
 ## Security
 
