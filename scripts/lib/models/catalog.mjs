@@ -84,12 +84,16 @@ function classifyModel(id) {
 
 // Cada agente tiene weights explícitos por tag. Más claro que prefer-order.
 export const PROFILE_WEIGHTS = {
-  phobos:     { top: 100, mid:  60, low: -40, known: 15 },
-  planner:    { top: 100, mid:  30, low: -40, known: 15 },
-  programmer: { code: 100, mid:  60, top:  30, known: 15 },
-  researcher: { low: 100, mid:  40, top: -40, code: 10, known: 15 },
-  tester:     { low: 100, mid:  20, top: -50, known: 15 },
-  archivist:  { mid: 100, top:  60, low: -40, known: 15 },
+  phobos:           { top: 100, mid:  60, low: -40, known: 15 },
+  // planner-hard: razonamiento profundo + buenas preguntas → top tier.
+  'planner-hard':   { top: 100, mid:  30, low: -40, known: 15 },
+  // gherkin-author: formalización mecánica (prosa → Given/When/Then) → mid OK,
+  // no necesita top. low tier puede fallar en estructura, así que penalizamos.
+  'gherkin-author': { mid: 100, low:  20, top:  60, known: 15 },
+  programmer:       { code: 100, mid:  60, top:  30, known: 15 },
+  researcher:       { low: 100, mid:  40, top: -40, code: 10, known: 15 },
+  tester:           { low: 100, mid:  20, top: -50, known: 15 },
+  archivist:        { mid: 100, top:  60, low: -40, known: 15 },
 };
 
 // Preferencia explícita por provider — gana sobre el scoring genérico cuando hay match.
@@ -101,12 +105,13 @@ export const PROFILE_WEIGHTS = {
 // (`claude-sonnet-4-6`); ambos son válidos según cómo el provider exponga el ID.
 export const PROVIDER_PREFERENCES = {
   opencode: {
-    phobos:     [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
-    planner:    [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
-    programmer: [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
-    researcher: [/^opencode\/qwen3?[-.]?6[-.]plus$/i, /^opencode\/qwen/i, /^opencode\/gpt-?5[-.]4[-.]mini$/i],
-    tester:     [/^opencode\/gpt-?5[-.]4[-.]mini$/i, /^opencode\/qwen3?[-.]?6[-.]plus$/i],
-    archivist:  [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    phobos:           [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    'planner-hard':   [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    'gherkin-author': [/^opencode\/gpt-?5[-.]4[-.]mini$/i, /^opencode\/qwen3?[-.]?6[-.]plus$/i, /^opencode\/claude-sonnet/i],
+    programmer:       [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
+    researcher:       [/^opencode\/qwen3?[-.]?6[-.]plus$/i, /^opencode\/qwen/i, /^opencode\/gpt-?5[-.]4[-.]mini$/i],
+    tester:           [/^opencode\/gpt-?5[-.]4[-.]mini$/i, /^opencode\/qwen3?[-.]?6[-.]plus$/i],
+    archivist:        [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
   },
 };
 

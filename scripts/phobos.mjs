@@ -118,7 +118,7 @@ async function getMainMenuState(agentDir, adapter) {
   // programmer, tester, archivist). Si lo dejamos como "todos los .md del
   // dir", contaríamos también agentes de Claude/OpenCode que el usuario
   // pueda tener al lado de Phobos (ej: .claude/agents/ con 6 phobos + 6 user).
-  const PHOBOS_AGENTS = ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist'];
+  const PHOBOS_AGENTS = ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist'];
   const all = await detectAllInstalledAdapters();
   const installedIDEs = [];
   for (const a of all) {

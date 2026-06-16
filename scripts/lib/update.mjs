@@ -1,8 +1,8 @@
 // Update flow — compara local vs template, preserva model:
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { cwd, stdin } from 'node:process';
-import { TEMPLATES_DIR } from './runtime.mjs';
+import { TEMPLATES_DIR, LEGACY_AGENTS_REPLACED } from './runtime.mjs';
 import { fileExists, tryExec, safeWriteFile } from './fs-utils.mjs';
 import { green, yellow, red, cyan, dim, bold } from './colors.mjs';
 import { pad } from './colors.mjs';
@@ -14,6 +14,102 @@ import { pressEnterToContinue } from './exit.mjs';
 // declara sus propios archivos vía adapter.trackedFiles(). Esto permite
 // que el mismo flow de "Actualizar agentes" sirva para OpenCode, Claude Code,
 // o cualquier IDE futuro — solo cambia el adapter que se le pasa.
+
+// ═══════════════════════════════════════════════════════════════════
+// Migración de agentes legacy (eliminados / renombrados)
+//
+// Cuando un agente del template se elimina y se reemplaza por otros, el
+// archivo local del user queda huérfano. El scan normal no lo detecta como
+// outdated (porque ya no está en trackedFiles del adapter), pero seguir
+// teniéndolo lo hace inconsistente: Phobos delega a los nuevos agentes
+// (planner-hard, gherkin-author) pero el dir tiene el planner.md viejo.
+//
+// Esta función:
+//   1. Recorre LEGACY_AGENTS_REPLACED del runtime.
+//   2. Detecta archivos locales de agentes legacy en el agentDir del adapter.
+//   3. Captura el model: actual de cada legacy detectado (para sugerir
+//      después dónde migrar la asignación de modelo).
+//   4. Pregunta al user si borrar el legacy. Si dice sí, lo borra.
+//   5. Devuelve un reporte que el caller usa para mostrar al user.
+//
+// NO migra automáticamente el modelo — los agentes nuevos se instalarán
+// con el modelo del template y el user puede re-configurar via models wizard.
+// Esto es defensivo: el modelo del legacy puede no ser óptimo para el split
+// (planner-hard necesita razonamiento; gherkin-author es más mecánico).
+// ═══════════════════════════════════════════════════════════════════
+
+export async function detectAndMigrateLegacyAgents(adapter) {
+  if (!adapter || !adapter.agentDir) {
+    return { detected: [], migrated: [], skipped: [] };
+  }
+  const detected = [];
+  const migrated = [];
+  const skipped = [];
+
+  for (const [legacyName, replacements] of Object.entries(LEGACY_AGENTS_REPLACED)) {
+    const legacyPath = join(cwd(), adapter.agentDir, `${legacyName}.md`);
+    if (!await fileExists(legacyPath)) continue;
+
+    // Capturar el modelo del legacy para sugerirlo después.
+    let legacyModel = null;
+    try {
+      const content = await readFile(legacyPath, 'utf-8');
+      const m = content.match(/^model:\s*(.+)$/m);
+      if (m) legacyModel = m[1].trim();
+    } catch {}
+
+    detected.push({ legacyName, legacyPath, replacements, legacyModel });
+  }
+
+  if (detected.length === 0) {
+    return { detected: [], migrated: [], skipped: [] };
+  }
+
+  // Mostrar al user el resumen y pedir confirmación.
+  console.log('');
+  console.log('  ' + yellow('⚠ Detecté agente(s) legacy reemplazados por nuevos:'));
+  for (const d of detected) {
+    console.log('  ' + dim('  · ') + cyan(d.legacyName + '.md')
+      + dim(' → ') + d.replacements.map(r => cyan(r + '.md')).join(dim(' + '))
+      + (d.legacyModel ? dim(`  (model: ${d.legacyModel})`) : ''));
+  }
+  console.log('');
+  console.log('  ' + dim('  El flow del template cambió y los agents nuevos van a instalarse'));
+  console.log('  ' + dim('  como parte de esta actualización. El legacy queda huérfano si no se borra.'));
+  console.log('');
+
+  const proceed = await tuiYesNo('¿Borrar los archivos legacy?', true);
+  if (!proceed) {
+    for (const d of detected) skipped.push(d);
+    return { detected, migrated, skipped };
+  }
+
+  for (const d of detected) {
+    try {
+      await unlink(d.legacyPath);
+      migrated.push(d);
+      console.log('  ' + green('✓ ') + dim('Borré ') + cyan(d.legacyPath));
+    } catch (e) {
+      console.log('  ' + red('✗ ') + dim('Falló borrar ') + cyan(d.legacyPath) + dim(': ' + e.message));
+      skipped.push(d);
+    }
+  }
+
+  // Hint si había modelos asignados.
+  const withModels = migrated.filter(d => d.legacyModel);
+  if (withModels.length > 0) {
+    console.log('');
+    console.log('  ' + dim('  ℹ Los siguientes agents tenían modelo asignado. Los nuevos agents'));
+    console.log('  ' + dim('    arrancan con el modelo del template. Revisalo después en'));
+    console.log('  ' + dim('    "Setear modelos de agentes" si querés ajustarlo:'));
+    for (const d of withModels) {
+      console.log('  ' + dim('    · ' + d.legacyName + ' (' + d.legacyModel + ') → revisar ')
+        + d.replacements.map(r => cyan(r)).join(dim(' + ')));
+    }
+  }
+
+  return { detected, migrated, skipped };
+}
 
 export function normalizeIgnoringModel(content) {
   return content.replace(/^model:\s*.+$/m, 'model: <PRESERVED>');
@@ -384,6 +480,17 @@ export async function actionUpdateAgents(adapter, { force = false } = {}) {
 
   // Sufijo `· <IDE>` para los step titles — refuerzo del contexto en cada paso.
   const ideSuffix = '  ·  ' + adapter.displayName;
+
+  // ─── Step 0/4: Migración de agentes legacy (planner → planner-hard + gherkin-author, etc.)
+  // Esto va ANTES del scan porque borrar legacy hace que los nuevos aparezcan
+  // como "missing" en el scan normal y se instalen como parte del flujo regular.
+  const legacy = await detectAndMigrateLegacyAgents(adapter);
+  if (legacy.migrated.length > 0) {
+    history.push({
+      label: 'Migración legacy',
+      value: legacy.migrated.map(m => m.legacyName + '.md → ' + m.replacements.join(' + ')).join('; '),
+    });
+  }
 
   // ─── Step 1/4: Detectar archivos diferentes y faltantes ────────────
   renderWizardStep(printUpdateBanner, history, (force

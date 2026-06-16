@@ -60,7 +60,7 @@ export class OpencodeAdapter extends IDEAdapter {
     const files = [];
 
     // Agentes
-    for (const agent of ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist']) {
+    for (const agent of ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist']) {
       files.push({
         src: `agentes/${agent}.md`,
         dst: `.opencode/agent/${agent}.md`,
@@ -110,12 +110,13 @@ export class OpencodeAdapter extends IDEAdapter {
   trackedFiles() {
     return [
       // Agentes — ignoreModel: true porque el usuario customiza el campo `model:` deliberadamente.
-      { src: 'agentes/phobos.md',     dst: '.opencode/agent/phobos.md',     ignoreModel: true },
-      { src: 'agentes/researcher.md', dst: '.opencode/agent/researcher.md', ignoreModel: true },
-      { src: 'agentes/planner.md',    dst: '.opencode/agent/planner.md',    ignoreModel: true },
-      { src: 'agentes/programmer.md', dst: '.opencode/agent/programmer.md', ignoreModel: true },
-      { src: 'agentes/tester.md',     dst: '.opencode/agent/tester.md',     ignoreModel: true },
-      { src: 'agentes/archivist.md',  dst: '.opencode/agent/archivist.md',  ignoreModel: true },
+      { src: 'agentes/phobos.md',          dst: '.opencode/agent/phobos.md',          ignoreModel: true },
+      { src: 'agentes/researcher.md',      dst: '.opencode/agent/researcher.md',      ignoreModel: true },
+      { src: 'agentes/planner-hard.md',    dst: '.opencode/agent/planner-hard.md',    ignoreModel: true },
+      { src: 'agentes/gherkin-author.md',  dst: '.opencode/agent/gherkin-author.md',  ignoreModel: true },
+      { src: 'agentes/programmer.md',      dst: '.opencode/agent/programmer.md',      ignoreModel: true },
+      { src: 'agentes/tester.md',          dst: '.opencode/agent/tester.md',          ignoreModel: true },
+      { src: 'agentes/archivist.md',       dst: '.opencode/agent/archivist.md',       ignoreModel: true },
       // Slash commands — no tienen `model:`, compare exact.
       { src: 'opencode/command/adapt-agents.md',      dst: '.opencode/command/adapt-agents.md',      ignoreModel: false },
       { src: 'opencode/command/models-wizard.md',     dst: '.opencode/command/models-wizard.md',     ignoreModel: false },

@@ -100,12 +100,23 @@ The English prompt exists for performance; Spanish output exists because Phobos 
 
 ## What you do
 
-1. Read the acceptance criteria from `plan.md`.
+1. **Read the `## Acceptance Criteria (Gherkin)` block from `plan.md`** — this is the contract. Every `Scenario:` must end up covered by at least one test that proves the Given→When→Then is observable in the running code. The `## Tests` section of `plan.md` already lists which test maps to which Scenario via `Verifies: Scenario "<name>"`; use that as your starting point.
 2. **Optional pre-step**: if CodeGraph is installed (`Test-Path .codegraph/codegraph.db` / `ls .codegraph/codegraph.db`), use `node .codegraph/launcher.mjs affected <file1> <file2> ...` to identify the subset of tests likely affected by the Programmer's changes. Run that subset first; full suite second. This avoids running the entire test suite when a 2-file change only touches one module. (CodeGraph se instala aislado en `.codegraph/` — el binario no está en `node_modules/` del proyecto principal, por eso el path explícito.)
 3. Run the project's existing tests (unit, integration, e2e as applicable).
-4. Add new tests when the plan indicates them or when you detect an obvious gap (happy path + 1-2 relevant edge cases).
+4. **Add or extend tests so every Scenario has at least one covering test.** If `plan.md` lists a Scenario without a corresponding test (or the test is missing), write it. Naming convention: include the Scenario name in the test description (e.g. `describe('Scenario: token rotates before expiry', ...)` or `test('Scenario: expired refresh token forces re-login', ...)`). This makes the traceability obvious in test output.
 5. Manually exercise UI/CLI flows if they are locally verifiable.
-6. Report the result: ✓ pass / ✗ fail, with detail.
+6. Report the result: ✓ pass / ✗ fail, with detail. **If a Scenario remains uncovered (no test exists or the test was skipped), report it as a `## Coverage gaps` entry in `test-report.md`** — Phobos surfaces this to the user.
+
+### Mapping Gherkin to tests
+
+| Gherkin clause | Test concept |
+|---|---|
+| `Given <precondition>` | Test setup / fixture / `beforeEach` |
+| `When <action>` | The call under test |
+| `Then <outcome>` | Assertion |
+| `And <extra clause>` | Additional setup or assertion |
+
+One Scenario can become one test (most common) or be split into multiple tests if a clean unit/integration boundary exists. **Never the reverse** — never merge multiple Scenarios into a single test, that destroys the traceability the plan worked to establish.
 
 ### Targeted tests via CodeGraph (when installed)
 

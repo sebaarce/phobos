@@ -37,8 +37,11 @@ const CLAUDE_AGENT_CONFIG = {
   researcher: {
     model: 'haiku',    // fast, barato — researcher hace muchas lecturas
   },
-  planner: {
-    model: 'sonnet',   // razonamiento estructurado
+  'planner-hard': {
+    model: 'sonnet',   // razonamiento + Q&A discovery — necesita capacidad
+  },
+  'gherkin-author': {
+    model: 'haiku',    // formalización mecánica — modelo liviano alcanza
   },
   programmer: {
     model: 'sonnet',   // código — balance capacidad/costo
@@ -101,7 +104,7 @@ export class ClaudeAdapter extends IDEAdapter {
     // Agentes: tomamos los templates de OpenCode (single source of truth)
     // y los escribimos a .claude/agents/<agent>.md aplicando el transformer
     // de frontmatter. El body queda idéntico.
-    for (const agent of ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist']) {
+    for (const agent of ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist']) {
       files.push({
         src: `agentes/${agent}.md`,
         dst: `.claude/agents/${agent}.md`,
@@ -161,12 +164,13 @@ export class ClaudeAdapter extends IDEAdapter {
     return [
       // Agentes — mismo single source. ignoreModel: true porque el usuario
       // customiza el modelo deliberadamente vía "Setear modelos".
-      { src: 'agentes/phobos.md',     dst: '.claude/agents/phobos.md',     ignoreModel: true,  transform: 'agent' },
-      { src: 'agentes/researcher.md', dst: '.claude/agents/researcher.md', ignoreModel: true,  transform: 'agent' },
-      { src: 'agentes/planner.md',    dst: '.claude/agents/planner.md',    ignoreModel: true,  transform: 'agent' },
-      { src: 'agentes/programmer.md', dst: '.claude/agents/programmer.md', ignoreModel: true,  transform: 'agent' },
-      { src: 'agentes/tester.md',     dst: '.claude/agents/tester.md',     ignoreModel: true,  transform: 'agent' },
-      { src: 'agentes/archivist.md',  dst: '.claude/agents/archivist.md',  ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/phobos.md',          dst: '.claude/agents/phobos.md',          ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/researcher.md',      dst: '.claude/agents/researcher.md',      ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/planner-hard.md',    dst: '.claude/agents/planner-hard.md',    ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/gherkin-author.md',  dst: '.claude/agents/gherkin-author.md',  ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/programmer.md',      dst: '.claude/agents/programmer.md',      ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/tester.md',          dst: '.claude/agents/tester.md',          ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/archivist.md',       dst: '.claude/agents/archivist.md',       ignoreModel: true,  transform: 'agent' },
       // Commands — templates propios.
       { src: 'claude/commands/adapt-agents.md',      dst: '.claude/commands/adapt-agents.md',      ignoreModel: false },
       { src: 'claude/commands/models-wizard.md',     dst: '.claude/commands/models-wizard.md',     ignoreModel: false },

@@ -97,7 +97,7 @@ Phobos te pasa **uno** de estos dos paths como destino del research:
 
 | Path destino | Cuándo lo recibís | Contexto |
 |--------------|-------------------|----------|
-| `vault/memory/tasks/<slug>/research.md` | Phobos abrió una **task SDD formal** (con archivist Open task). Vas a ser el primer paso de un pipeline planner → programmer → tester → archivist. | Implementación o investigación que después deriva en código. |
+| `vault/memory/tasks/<slug>/research.md` | Phobos abrió una **task SDD formal** (con archivist Open task). Vas a ser el primer paso de un pipeline `planner-hard` (Q&A discovery) → `gherkin-author` (formalización a Gherkin) → gate → programmer → tester → archivist. | Implementación o investigación que después deriva en código. |
 | `vault/memory/research-queries/<auto-slug>.md` | Phobos te delega **directo** desde una pregunta del usuario (cache miss en semantic search). No hay task abierta, no hay archivist antes ni después tuyo. | Pregunta casual del usuario tipo *"¿dónde está X?"* / *"¿cómo funciona Y?"*. |
 
 **Comportamiento es IDÉNTICO en ambos casos**: misma estructura de `research.md`, mismas reglas de seguridad, mismo output contract a Phobos. La diferencia es solo el **path destino** que Phobos te indica.
@@ -549,7 +549,7 @@ Do NOT use `node -e "..."` with double quotes — PowerShell interprets `${...}`
 
 1. **Edit scoped**: only `vault/memory/tasks/*/research.md` (single-segment). All other paths blocked by OpenCode runtime.
 2. **Shell scope**: read commands (`cat`, `find`, `rg`, `grep`, `ls`, `Get-Content`, `Select-String`, `git status/diff/log/show`) ONLY inside project cwd. No `find /`, no `rg /`, no historical fishing with `git show HEAD~50:file`.
-3. **Secrets in research.md propagate to ALL downstream agents** (planner, programmer, tester, archivist) and end up in git. **Never transcribe credentials**. If you encounter one: reference abstractly (`- File: src/config/db.ts:15 — reads DATABASE_URL (real value NOT included)`) or use placeholder (`<SECRET_DETECTED_IN_X>`).
+3. **Secrets in research.md propagate to ALL downstream agents** (planner-hard, gherkin-author, programmer, tester, archivist) and end up in git. **Never transcribe credentials**. If you encounter one: reference abstractly (`- File: src/config/db.ts:15 — reads DATABASE_URL (real value NOT included)`) or use placeholder (`<SECRET_DETECTED_IN_X>`).
 4. **Sensitive files NOT to read** (also in `security.forbidden_read_files`): `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `~/.aws/`, `~/.ssh/`, `~/.gnupg/`, `auth.json`, OS files (`/etc/*`, `C:\Windows\System32\config\*`). If you need a credential's format, ask Phobos to ask the user — don't read the file yourself.
 5. **If you need credential format/keys**: add an entry in `## Open questions` asking Phobos to ask the user. Never satisfy curiosity by reading the credential file.
 6. **Traceability footer mandatory** at end of `research.md`:

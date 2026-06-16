@@ -25,10 +25,22 @@ export const PKG_VERSION = (() => {
   }
 })();
 
-// Lista de agentes — IDE-agnostic. Estos 6 agentes existen en cualquier
+// Lista de agentes — IDE-agnostic. Estos 7 agentes existen en cualquier
 // target del Phobos (OpenCode, Claude Code, etc.) con los mismos roles;
 // solo cambia el formato del frontmatter, que lo maneja el adapter.
-export const AGENTS = ['phobos', 'researcher', 'planner', 'programmer', 'tester', 'archivist'];
+//
+// Nota: el agente 'planner' único fue dividido en 'planner-hard' (discovery
+// vía Q&A iterativo, hasta 3 rondas) + 'gherkin-author' (formalización a
+// Gherkin / Steps / Tests con trazabilidad). Pipeline BDD. Los proyectos con
+// 'planner.md' viejo deben migrar vía "Actualizar agentes" en el wizard.
+export const AGENTS = ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist'];
+
+// Lista del agente legacy reemplazado por la nueva arquitectura BDD.
+// El update wizard mira esta lista para detectar instalaciones viejas y
+// ofrecer migración automática (borrar planner.md, instalar los dos nuevos).
+export const LEGACY_AGENTS_REPLACED = {
+  planner: ['planner-hard', 'gherkin-author'],
+};
 
 // Habilitar keypress events para TUI
 readlineSync.emitKeypressEvents(stdin);
@@ -42,12 +54,13 @@ readlineSync.emitKeypressEvents(stdin);
 
 // Rol de cada agente (solo descriptivo para UI — los weights están en PROFILE_WEIGHTS).
 export const AGENT_PROFILES = {
-  phobos:     { role: 'orquestación' },
-  planner:    { role: 'razonamiento' },
-  programmer: { role: 'código' },
-  researcher: { role: 'lectura rápida' },
-  tester:     { role: 'tests, barato' },
-  archivist:  { role: 'prosa, distilar' },
+  phobos:          { role: 'orquestación' },
+  researcher:      { role: 'lectura rápida' },
+  'planner-hard':  { role: 'razonamiento + Q&A discovery' },
+  'gherkin-author':{ role: 'formalización estructurada' },
+  programmer:      { role: 'código' },
+  tester:          { role: 'tests, barato' },
+  archivist:       { role: 'prosa, distilar' },
 };
 
 // readline para inputs de texto (filtros, manual paste). Para yes/no y menús usamos TUI.

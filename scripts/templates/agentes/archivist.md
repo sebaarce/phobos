@@ -184,9 +184,12 @@ Phobos passes you: `slug`, `result: done | partial | abandoned`. Here you do sev
 
 - `vault/memory/tasks/<slug>/README.md`
 - `vault/memory/tasks/<slug>/research.md` (if it exists)
+- `vault/memory/tasks/<slug>/requirements.md` (if it exists — written by `@planner-hard` from BDD pipeline)
 - `vault/memory/tasks/<slug>/plan.md` (if it exists)
 - `vault/memory/tasks/<slug>/implementation.md` (if it exists)
 - `vault/memory/tasks/<slug>/test-report.md` (if it exists)
+
+> When `requirements.md` exists, it contains the Q&A trail with the user (rounds 1-3 from `@planner-hard`). It is a high-value distillation source — pay special attention to its `## Asunciones` section (any `[ASUNCIÓN]` markers that survived the gate became implicit decisions worth capturing as wiki entries or glossary terms).
 
 #### 4b. Reconcile final checkboxes in `plan.md`
 
@@ -488,7 +491,7 @@ Phobos te pasa: `query_slug` (archivo existente en `vault/memory/research-querie
 7. **No tocar `research.md` body** más allá del footer. El contenido ya es válido — el researcher ya escribió un research bueno; el modo no re-investiga.
 
 **Resultado neto**:
-- Phobos puede saltear el researcher en el pipeline siguiente. Va directo a `@planner` con el research ya en place.
+- Phobos puede saltear el researcher en el pipeline siguiente. Va directo a `@planner-hard` con el research ya en place.
 - El research-queries/ queda más limpio (sin archivos huérfanos que ya se promovieron).
 - Trazabilidad explícita en el README de la task ("Promoted-from").
 
