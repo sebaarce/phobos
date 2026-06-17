@@ -384,6 +384,14 @@ export async function installCodeGraph() {
 
   const status = await detectCodeGraphStatus();
 
+  // Detección de install legacy (post-refactor BDD): si el global está OK +
+  // el proyecto tiene .codegraph/codegraph.db pero NO tiene launcher.mjs,
+  // probablemente quedó el shim viejo (.codegraph/cg.cjs) de antes del refactor.
+  // En ese caso, ofrecemos "regenerar launcher" en vez de re-instalar todo.
+  const legacyShimPath = join(cwd(), '.codegraph', 'cg.cjs');
+  const hasLegacyShim = await fileExists(legacyShimPath);
+  const needsLauncherRegen = inProject && status.pkgInstalled && status.dbBuilt && !status.shimReady;
+
   // ─── Decisión rápida si ya está todo OK ────────────────────────────
   if (status.pkgInstalled && status.shimReady && status.dbBuilt && inProject) {
     const { index } = await tuiSelect(
@@ -415,6 +423,56 @@ export async function installCodeGraph() {
       return;
     }
     // index === 1: continúa al flujo normal (reinstala el paquete global).
+  } else if (needsLauncherRegen) {
+    // Install legacy: tiene DB indexada y global instalado pero falta el
+    // launcher.mjs nuevo. Ofrecer regenerar el launcher sin re-instalar.
+    console.log(dim('  ℹ Detecté instalación previa con shim legacy ('
+      + (hasLegacyShim ? 'cg.cjs' : 'sin launcher')
+      + '). El binario global y la DB están OK — solo falta el launcher nuevo.'));
+    const { index } = await tuiSelect(
+      '\n¿Qué hacer?',
+      [
+        'Regenerar launcher (rápido — escribe .codegraph/launcher.mjs y termina)',
+        'Re-indexar (regenerar launcher + correr index)',
+        'Re-instalar el paquete global (forzar actualización completa)',
+        'Desinstalar ' + dim('(per-proyecto / global / completo)'),
+        'Cancelar',
+      ],
+      0,
+    );
+    if (index === 4) { console.log(dim('  ⊘ saltado.\n')); return; }
+    if (index === 3) { await uninstallCodeGraph(); return; }
+
+    // Common para 0, 1, 2: regenerar launcher (chequear si hay legacy a limpiar)
+    if (hasLegacyShim) {
+      const cleanLegacy = await tuiYesNo(
+        '  ¿Borrar también el shim viejo `.codegraph/cg.cjs`? (el launcher nuevo lo reemplaza)',
+        true,
+      );
+      if (cleanLegacy) {
+        await rmrf(legacyShimPath);
+        console.log(green('  ✓ ') + dim('Borrado .codegraph/cg.cjs (legacy)'));
+      }
+    }
+    await ensureCodeGraphShimGlobal();
+    await writeProjectCodeGraphLauncher();
+    console.log(green('  ✓ ') + dim('Launcher regenerado: ') + cyan(CODEGRAPH_LAUNCHER_LOCAL));
+
+    if (index === 0) {
+      // Solo regenerar launcher — listo
+      console.log(green('\n  ✓ Listo. Probá una query: ') + cyan(`node ${CODEGRAPH_LAUNCHER_LOCAL} query "..."`));
+      console.log('');
+      return;
+    }
+    if (index === 1) {
+      // Regenerar + re-index
+      console.log(dim('\n  Re-indexando...\n'));
+      const code = await runChild('node', [CODEGRAPH_LAUNCHER_LOCAL, 'index'], 'Re-indexar CodeGraph');
+      if (code === 0) console.log(green('\n  ✓ Re-indexación completa.\n'));
+      else console.log(yellow(`\n  ⚠ codegraph index exit code ${code}.\n`));
+      return;
+    }
+    // index === 2: re-install global — cae al flujo normal
   } else if (status.pkgInstalled && !status.dbBuilt && inProject) {
     console.log(dim('  ℹ Paquete global instalado pero sin indexar todavía. Voy a configurar el proyecto + indexar.\n'));
   } else if (status.pkgInstalled && !inProject) {

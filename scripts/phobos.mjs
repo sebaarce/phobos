@@ -193,10 +193,11 @@ async function runMainMenu(agentDir, adapter) {
       : 'Memory (RAG)            ' + dim('(instalar engine de búsqueda semántica)');
 
     // CodeGraph label — distingue 4 estados:
-    //   · no instalado global              → "instalar..."
-    //   · instalado global, sin proyecto   → "global OK · entrá a un repo para configurar"
+    //   · no instalado global                  → "instalar..."
+    //   · instalado global, sin proyecto       → "global OK · entrá a un repo para configurar"
     //   · instalado global, en proyecto sin DB → "falta configurar este proyecto"
-    //   · instalado global, en proyecto con DB → "instalado · re-indexar / re-instalar / desinstalar"
+    //   · instalado + DB + sin launcher nuevo  → "legacy detectado · regenerar launcher"
+    //   · todo OK (incl. launcher nuevo)       → "re-indexar / re-instalar / desinstalar"
     const cg = state.codeGraph || {};
     let codeGraphLabel;
     if (!cg.pkgInstalled) {
@@ -205,6 +206,9 @@ async function runMainMenu(agentDir, adapter) {
       codeGraphLabel = 'CodeGraph               ' + dim('(global instalado · entrá a un repo para configurar)');
     } else if (!cg.dbBuilt) {
       codeGraphLabel = 'CodeGraph               ' + dim('(global OK · falta configurar este proyecto)');
+    } else if (!cg.shimReady) {
+      // DB existe pero el launcher nuevo no — install legacy de antes del refactor BDD.
+      codeGraphLabel = 'CodeGraph               ' + dim('(legacy · regenerar launcher)');
     } else {
       codeGraphLabel = 'CodeGraph               ' + dim('(instalado · re-indexar / re-instalar / desinstalar)');
     }
