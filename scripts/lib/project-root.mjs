@@ -3,6 +3,11 @@
 // elegido vía `process.chdir()` para que el resto del wizard escriba en el
 // lugar correcto sin tener que pasar la ruta por todos lados.
 //
+// También expone `ensureVaultScaffolding()` que mantiene la INVARIANTE:
+// **vault/ vive en cwd, siempre**. Si no existe, se crea la estructura
+// mínima (subdirs vacíos) para que cualquier subagente que escriba después
+// no se tope con "dir no existe" y termine buscando por todos lados.
+//
 // Background:
 //   En monorepos (ej: `payments-backoffice/` es el git root, pero el proyecto
 //   real vive en `payments-backoffice/backoffice/`), `cwd()` y git root pueden
@@ -19,10 +24,11 @@
 //   4. process.chdir() al elegido. Todo el resto del wizard usa cwd() normal.
 
 import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { join, normalize, resolve, sep } from 'node:path';
 import { cwd, chdir } from 'node:process';
 import { execSync } from 'node:child_process';
-import { tuiSelect } from './tui.mjs';
+import { tuiSelect, tuiYesNo } from './tui.mjs';
 import { cyan, dim, yellow, green } from './colors.mjs';
 
 // Archivos que típicamente identifican el root de un proyecto. Si están en cwd
@@ -177,4 +183,97 @@ export async function ensureProjectRoot({ silent = false, nonInteractive = false
   console.log('');
 
   return chosen;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Vault scaffolding — INVARIANTE de Phobos
+//
+// Regla: `vault/` vive en `cwd`. Siempre. Cualquier subagente que escriba
+// vault usa paths relativos (`vault/memory/...`) y NUNCA busca en otros
+// lados (parent dirs, ~/.config, subdirs random). Si vault no existe en
+// cwd, NO se busca — se crea con esta función o se devuelve blocked.
+//
+// Esta función crea los subdirs mínimos necesarios (no archivos — los
+// archivos los pone el archivist Bootstrap o se van escribiendo a medida
+// que el flow SDD los necesita). Idempotente: si los dirs ya existen, no
+// toca nada.
+//
+// La diferencia con archivist Bootstrap:
+//   · Bootstrap escribe templates: SCHEMA.md, TASKS.md (con secciones),
+//     README.md del vault, SECURITY.md, etc. ES contenido inicial completo.
+//   · Esta función solo crea CARPETAS vacías. Es el piso mínimo para que
+//     el archivist pueda escribir SIN equivocarse de dir.
+//
+// Por qué hacer ambos: el wizard se ejecuta en el shell del user (process
+// limpio, paths confiables) — crear dirs es 100% determinista. El archivist
+// corre en una sesión de subagente (cwd posiblemente confuso) y ha mostrado
+// patrones de drift al crear estructura. Separar las dos cosas reduce el
+// blast radius del drift.
+// ═══════════════════════════════════════════════════════════════════
+
+const VAULT_DIRS = [
+  'vault',
+  'vault/memory',
+  'vault/memory/tasks',
+  'vault/memory/insights',
+  'vault/memory/wiki',
+  'vault/memory/glossary',
+  'vault/memory/research-queries',
+  'vault/sources',
+];
+
+/**
+ * Asegura que el scaffolding mínimo de vault/ exista en cwd. Idempotente.
+ *
+ * Opciones:
+ *   - `silent: true` → si vault no existe, lo crea sin preguntar.
+ *   - `prompt: true` (default) → si vault no existe, pregunta al user antes
+ *     de crear. Útil para evitar crear vault/ por error en un dir random
+ *     (ej: si ensureProjectRoot devolvió un dir equivocado).
+ *
+ * Devuelve `true` si vault está listo, `false` si el user canceló.
+ */
+export async function ensureVaultScaffolding({ silent = false, prompt = true } = {}) {
+  const vaultPath = resolve(cwd(), 'vault');
+  const vaultExists = existsSync(vaultPath);
+
+  if (vaultExists) {
+    // Verificar y completar subdirs faltantes (idempotente).
+    let createdAny = false;
+    for (const d of VAULT_DIRS) {
+      const full = resolve(cwd(), d);
+      if (!existsSync(full)) {
+        await mkdir(full, { recursive: true });
+        createdAny = true;
+      }
+    }
+    if (createdAny) {
+      console.log('  ' + green('✓ ') + dim('vault/ ya existía — completé subdirs faltantes en ') + cyan(vaultPath));
+    }
+    return true;
+  }
+
+  // vault/ no existe en cwd.
+  if (!silent && prompt) {
+    console.log('');
+    console.log('  ' + yellow('ℹ ') + dim('No hay ') + cyan('vault/') + dim(' en este directorio:'));
+    console.log('  ' + dim('  ') + cyan(cwd()));
+    console.log('  ' + dim('  Phobos exige la INVARIANTE: vault/ vive en cwd. Si no existe acá,'));
+    console.log('  ' + dim('  todos los agents van a fallar (o peor — explorar por todos lados).'));
+    console.log('');
+    const create = await tuiYesNo('¿Crear vault/ con el scaffolding mínimo ahora?', true);
+    if (!create) {
+      console.log('  ' + yellow('⊘ ') + dim('vault/ no creado. Los agents no van a poder operar.'));
+      return false;
+    }
+  }
+
+  // Crear todo el árbol de una.
+  for (const d of VAULT_DIRS) {
+    await mkdir(resolve(cwd(), d), { recursive: true });
+  }
+  console.log('  ' + green('✓ ') + dim('vault/ creado en ') + cyan(vaultPath));
+  console.log('  ' + dim('    (subdirs: memory/{tasks,insights,wiki,glossary,research-queries}, sources/)'));
+  console.log('  ' + dim('    Los archivos iniciales (TASKS.md, SCHEMA.md, etc.) los escribe el archivist en su próximo Bootstrap.'));
+  return true;
 }

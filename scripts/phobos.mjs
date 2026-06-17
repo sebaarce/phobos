@@ -39,7 +39,7 @@ import { actionMemory } from './lib/memory/index.mjs';
 import { detectQdrantStatus } from './lib/memory/engine.mjs';
 import { OpencodeAdapter } from './lib/adapters/opencode.mjs';
 import { ClaudeAdapter } from './lib/adapters/claude.mjs';
-import { ensureProjectRoot } from './lib/project-root.mjs';
+import { ensureProjectRoot, ensureVaultScaffolding } from './lib/project-root.mjs';
 
 // ═══════════════════════════════════════════════════════════════════
 // Menu principal — stack-based con clear screen entre niveles
@@ -585,6 +585,17 @@ async function main() {
       return;
     }
     throw err;
+  }
+
+  // INVARIANTE: vault/ vive en cwd. Si no existe, crear el scaffolding mínimo
+  // (subdirs vacíos) antes de cualquier otra cosa. Esto previene el patrón
+  // común donde el archivist falla buscando vault/ y termina explorando dirs
+  // random — la causa raíz de varios silent failures que vimos.
+  const vaultReady = await ensureVaultScaffolding();
+  if (!vaultReady) {
+    console.log(dim('\n  ⊘ Sin vault/ no se puede continuar. Saliendo.'));
+    finalizeAndExit(0);
+    return;
   }
 
   // Auto-detect: ¿hay una instalación previa de algún IDE en este proyecto?
