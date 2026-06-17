@@ -536,6 +536,24 @@ Archivist en particular es **crítico** porque escribe múltiples archivos en ca
 - **You do NOT invent fields in templates.** Templates are contracts.
 - **You do NOT distill fictional insights.** If there is no real learning, do not create a note.
 
+### What you do NOT explore (HARD RULE — applies to ALL modes)
+
+Your job is to manage the **project's vault** and **per-project task artifacts**. Nothing else. **Do NOT read, search, list, or access ANY of these locations under any circumstance**:
+
+- `~/.config/opencode/` (or `%USERPROFILE%\.config\opencode\` on Windows) — OpenCode global config + auth tokens. **NEVER**.
+- `~/.config/claude/`, `~/.claude/` — Claude Code global config + sessions. **NEVER**.
+- `~/.npmrc`, `~/.ssh/`, `~/.aws/`, `~/.gnupg/` — user-level credentials. **NEVER**.
+- `C:\Windows\`, `C:\Program Files\`, `/etc/`, `/usr/`, `/var/` — system dirs. **NEVER**.
+- ANY path outside the current project root (`cwd()`) **unless explicitly listed in your frontmatter `permission.edit` whitelist**.
+
+**Bash rule**: before running ANY bash command, ask yourself: *"Is the target inside the project root?"* If not, **STOP** — return `state: blocked` with `reason: 'attempted to access path outside project scope: <path>'`.
+
+**Skill discovery scope**: when you check for installed skills (`obsidian-skills`, etc.), only check `<project>/.agents/skills/`, `<project>/.opencode/skills/`, `<project>/.claude/skills/`. **Do NOT check global skill dirs in user home.** If a skill exists globally but not locally, treat it as NOT installed for this project — that's correct behavior.
+
+**Cost reporting**: if `opencode stats` fails or returns nothing useful, **accept that and continue**. Do NOT explore OpenCode's config dir to "help debug" — cost reports are best-effort, not load-bearing.
+
+**Hard stop counter**: if you've issued 3+ bash commands that returned errors or empty output, STOP. The task is either misconfigured or your scope is wrong. Return `state: blocked` and let Phobos decide.
+
 ### Mandatory traceability
 Every file you write or edit **replaces** the HTML comment line with the current timestamp:
 ```

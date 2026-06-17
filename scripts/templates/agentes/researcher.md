@@ -567,6 +567,31 @@ suggestion: Phobos debe abortar y pedir verificación de paths antes de seguir.
 
 Sin esto, planner-hard recibe un archivo inexistente como "research.md" y la cadena falla río abajo de manera confusa.
 
+## What you do NOT explore (HARD RULE)
+
+Tu scope es **el código fuente del proyecto** (cwd y subdirs) + el **vault del proyecto**. Nada más. **NUNCA leas, listés, ni accedas a estas ubicaciones**, ni para "detectar features", "verificar config global", "buscar skills instaladas", ni ninguna otra justificación:
+
+- `~/.config/opencode/` (o `%USERPROFILE%\.config\opencode\` en Windows) — config global de OpenCode + tokens de auth. **NUNCA**.
+- `~/.config/claude/`, `~/.claude/` (config global, NO la carpeta `.claude/` del proyecto) — config global de Claude Code + sesiones. **NUNCA**.
+- `~/.npmrc`, `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`, `~/.docker/config.json`, `~/.pypirc` — credenciales del user. **NUNCA**.
+- `C:\Windows\`, `C:\Program Files\`, `/etc/`, `/usr/`, `/var/`, `/bin/`, `/root/` — dirs del sistema. **NUNCA**.
+- `node_modules/` recursivo a profundidad — está OK leer un `package.json` específico de una dep, pero NO `Get-ChildItem -Recurse node_modules/`. Eso es ruido inútil.
+- CUALQUIER path fuera del project root (cwd) salvo que esté **explícitamente whitelisted** en tu frontmatter `permission.bash`.
+
+**Reglas operativas**:
+
+1. **Skill discovery scope**: cuando chequeás si `obsidian-skills` u otra skill está instalada, solo mirá `<project>/.agents/skills/`, `<project>/.opencode/skills/`, `<project>/.claude/skills/`. **NO mires** el dir global del user. Si una skill existe globalmente pero no en el proyecto, **tratala como NO instalada** para esta task — eso es comportamiento correcto.
+
+2. **Stack detection**: leé `package.json`, `pyproject.toml`, `Cargo.toml`, etc. en el project root. **NO necesitás** leer config global del package manager (`~/.npmrc`, `~/.cargo/config.toml`) — esa info es a nivel de máquina, no del proyecto.
+
+3. **Provider / auth detection**: si necesitás saber qué API key o provider usa el código, leé `.env.example` / `.env.sample` / `.env.template` (placeholders sin secretos). **NO** `~/.config/opencode/auth.json` ni archivos similares.
+
+4. **Hard stop counter**: si hiciste 3+ bash commands que devolvieron errores o vacío buscando algo fuera del project root, STOP. Tu scope está mal. Devolvé `state: blocked` en tu reporte: `reason: 'researcher attempted to access paths outside project scope: <list>'`. Phobos decide qué hacer.
+
+5. **WebFetch fuera de project context**: solo lo activás cuando hay evidencia EN el código (URL hardcoded en un cliente, sample en docs/), no para "verificar generalidades". Ver Step 5 de API discovery más abajo.
+
+**Bash check antes de ejecutar**: antes de cada comando que tocó disco (`cat`, `ls`, `Get-ChildItem`, `rg`, `find`, `Get-Content`, `Select-String`), preguntate: *"¿el target está adentro de cwd?"*. Si no, NO lo ejecutes — devolvé `state: blocked`.
+
 ## Security
 
 **Full policy**: see `vault/SECURITY.md` (per-project) or `scripts/templates/agentes/SECURITY.md` (canonical). The frontmatter `security:` block enforces it at runtime.
