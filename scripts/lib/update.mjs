@@ -404,6 +404,98 @@ export async function runUpdateAll(updates, adapter = null) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Proactive update check — al arrancar el wizard
+//
+// Filosofía: si hay updates pendientes (templates del repo Phobos más nuevos
+// que los del proyecto), ofrecer aplicarlos ANTES de entrar al menú principal.
+// Sino el user se olvida de hacerlo manualmente y corre tasks con agents
+// outdated, lo cual produce bugs confusos (ej: el archivist sin la regla
+// "do NOT explore" se va a tocar ~/.config/opencode/).
+//
+// UX:
+//   · Sin updates → silencio total. Va al menú principal.
+//   · Con updates → muestra summary corto + tuiYesNo("¿Aplicar ahora?").
+//     - Sí → corre runUpdateAll + migraciones legacy + retorna al menú.
+//     - No → continúa al menú. El label "Actualizar agentes (X pendientes)"
+//       sigue visible — el user puede aplicarlos manualmente cuando quiera.
+//
+// El check incluye la detección legacy (planner.md → planner-hard +
+// gherkin-author) para que si el user dice "sí" se migre todo de una.
+// ═══════════════════════════════════════════════════════════════════
+
+export async function proactiveUpdateCheck(adapter) {
+  if (!adapter) return; // sin install no hay nada que actualizar
+
+  // Scan barato: solo lecturas de filesystem + diff de contenido.
+  const updates = await scanForUpdates(adapter);
+  const totalPending = updates.outdated.length + updates.missing.length;
+
+  // Legacy detection en paralelo — si hay `planner.md` viejo, lo metemos
+  // en el conteo para que el user sepa que es parte del paquete.
+  const legacyDetected = [];
+  for (const legacyName of Object.keys(LEGACY_AGENTS_REPLACED)) {
+    const legacyPath = join(cwd(), adapter.agentDir, `${legacyName}.md`);
+    if (await fileExists(legacyPath)) legacyDetected.push(legacyName);
+  }
+
+  if (totalPending === 0 && legacyDetected.length === 0) {
+    return; // todo al día — silencio
+  }
+
+  // Hay algo que actualizar. Mostrar summary breve y preguntar.
+  console.log('');
+  console.log('  ' + cyan('▸ ') + bold('Updates pendientes para ' + adapter.displayName));
+  if (updates.outdated.length > 0) {
+    console.log('  ' + dim('  · ') + yellow(updates.outdated.length + ' archivo' + (updates.outdated.length > 1 ? 's' : '') + ' outdated')
+      + dim(' (templates del repo más nuevos que los de este proyecto)'));
+  }
+  if (updates.missing.length > 0) {
+    console.log('  ' + dim('  · ') + yellow(updates.missing.length + ' archivo' + (updates.missing.length > 1 ? 's' : '') + ' faltante' + (updates.missing.length > 1 ? 's' : ''))
+      + dim(' (existen en el template pero no en este proyecto)'));
+  }
+  if (legacyDetected.length > 0) {
+    const replacements = legacyDetected.map(l => l + '.md → ' + LEGACY_AGENTS_REPLACED[l].join(' + ')).join('; ');
+    console.log('  ' + dim('  · ') + yellow('agentes legacy detectados: ') + dim(replacements));
+  }
+
+  console.log('');
+  console.log('  ' + dim('Aplicar updates ahora preserva los modelos asignados localmente.'));
+  console.log('  ' + dim('Si decís No, podés aplicarlos después desde el menú "Actualizar agentes".'));
+
+  let apply;
+  try {
+    apply = await tuiYesNo('\n¿Aplicar updates ahora?', true);
+  } catch {
+    // Cancel (Esc) — tratar como No
+    return;
+  }
+  if (!apply) {
+    console.log('  ' + dim('⊘ Saltado. Los updates siguen pendientes en el menú.'));
+    return;
+  }
+
+  // Aplicar — primero migración legacy (borra planner.md viejo para que
+  // el scan posterior detecte planner-hard y gherkin-author como missing
+  // y los copie como parte del normal flow).
+  if (legacyDetected.length > 0) {
+    console.log('');
+    await detectAndMigrateLegacyAgents(adapter);
+    // Re-scan después de la migración legacy para incluir los nuevos missing.
+    const rescan = await scanForUpdates(adapter);
+    updates.outdated = rescan.outdated;
+    updates.missing = rescan.missing;
+  }
+
+  console.log('');
+  console.log('  ' + cyan('▸ ') + dim('Aplicando ' + (updates.outdated.length + updates.missing.length) + ' updates...'));
+  await runUpdateAll(updates, adapter);
+  console.log('');
+  console.log('  ' + green('✓ Updates aplicados. Si OpenCode está corriendo, cerralo y reabrilo'));
+  console.log('  ' + green('  para que los prompts cacheados de los agents se invaliden.'));
+  console.log('');
+}
+
 export async function ensureUpdated(adapter) {
   const updates = await scanForUpdates(adapter);
   const nothingToDo = updates.outdated.length === 0 && updates.missing.length === 0;

@@ -6,14 +6,15 @@ temperature: 0.1
 permission:
   edit:
     "*": deny
-    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad —
-    # necesario en monorepos con .opencode/ en un subdir (OpenCode resuelve
-    # paths desde el git root, no desde .opencode/). El `**` matchea cero o
-    # más segmentos: funciona igual si opencode corre desde el git root.
+    # Doble pattern (bare + `**/`): cubre proyecto plano y monorepo nesteado.
+    # Algunos globs no tratan `**/` como "cero o más segmentos" — necesitamos
+    # las dos versiones explícitas para que matchee en ambos casos.
     # Formal SDD task — research como primer paso de un pipeline completo.
+    "vault/memory/tasks/*/research.md": allow
     "**/vault/memory/tasks/*/research.md": allow
     # Quick research-only query — pregunta casual del usuario sin task wrap.
     # Phobos delega directo acá cuando hay cache miss en semantic search.
+    "vault/memory/research-queries/*.md": allow
     "**/vault/memory/research-queries/*.md": allow
   bash:
     "*": deny
@@ -586,7 +587,21 @@ Tu scope es **el código fuente del proyecto** (cwd y subdirs) + el **vault del 
 
 3. **Provider / auth detection**: si necesitás saber qué API key o provider usa el código, leé `.env.example` / `.env.sample` / `.env.template` (placeholders sin secretos). **NO** `~/.config/opencode/auth.json` ni archivos similares.
 
-4. **Hard stop counter**: si hiciste 3+ bash commands que devolvieron errores o vacío buscando algo fuera del project root, STOP. Tu scope está mal. Devolvé `state: blocked` en tu reporte: `reason: 'researcher attempted to access paths outside project scope: <list>'`. Phobos decide qué hacer.
+4. **Hard stop counter (3 strikes — out)**: si ANY de estos contadores llega a 3, STOP inmediatamente:
+   - 3+ bash commands devolviendo errores o vacío fuera del project root;
+   - 3+ Write/Edit calls rechazados por el permission system (típico cuando el pattern no matchea el path — NO te vayas a explorar config para "debuggear", devolvé blocked);
+   - 3+ intentos al mismo deliverable (research.md) sin éxito de verify.
+
+   Devolvé:
+   ```
+   state: blocked
+   reason: hard stop reached — <write/bash/verify> failed N times.
+   attempted_path: <último path>
+   attempted_pattern_observed: <si OpenCode te mostró el pattern en el error>
+   suggestion: probable mismatch entre cwd y permission pattern del agent. Phobos debería verificar project_root y/o re-aplicar templates del agente vía "Actualizar agentes".
+   ```
+
+   **Bajo ningún concepto** explorés `~/.config/opencode/`, `~/.config/claude/`, ni paths globales del user para "debuggear". Eso ES el síntoma — te quedaste sin scope. Devolvé blocked.
 
 5. **WebFetch fuera de project context**: solo lo activás cuando hay evidencia EN el código (URL hardcoded en un cliente, sample en docs/), no para "verificar generalidades". Ver Step 5 de API discovery más abajo.
 

@@ -6,18 +6,28 @@ temperature: 0.3
 permission:
   edit:
     "*": deny
-    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad —
-    # necesario en monorepos con .opencode/ en un subdir (OpenCode resuelve
-    # paths desde el git root). El `**` matchea cero o más segmentos: funciona
-    # igual si opencode corre desde el git root o desde un subdir.
+    # Doble pattern: declaramos AMBAS variantes (bare y con `**/`) para que
+    # matchee tanto en proyectos planos (cwd == project root) como en
+    # monorepos nesteados (vault/ vive en un subdir del git root). Algunos
+    # globs no tratan `**/` como "cero o más segmentos" — por eso necesitamos
+    # las dos versiones explícitas.
+    "vault/SCHEMA.md": allow
     "**/vault/SCHEMA.md": allow
+    "vault/TASKS.md": allow
     "**/vault/TASKS.md": allow
+    "vault/README.md": allow
     "**/vault/README.md": allow
+    "vault/memory/**": allow
     "**/vault/memory/**": allow
+    "vault/sources/.gitkeep": allow
     "**/vault/sources/.gitkeep": allow
+    "vault/memory/tasks/.gitkeep": allow
     "**/vault/memory/tasks/.gitkeep": allow
+    "vault/memory/insights/.gitkeep": allow
     "**/vault/memory/insights/.gitkeep": allow
+    "vault/memory/wiki/.gitkeep": allow
     "**/vault/memory/wiki/.gitkeep": allow
+    "vault/memory/glossary/.gitkeep": allow
     "**/vault/memory/glossary/.gitkeep": allow
   bash:
     "*": deny
@@ -552,7 +562,24 @@ Your job is to manage the **project's vault** and **per-project task artifacts**
 
 **Cost reporting**: if `opencode stats` fails or returns nothing useful, **accept that and continue**. Do NOT explore OpenCode's config dir to "help debug" — cost reports are best-effort, not load-bearing.
 
-**Hard stop counter**: if you've issued 3+ bash commands that returned errors or empty output, STOP. The task is either misconfigured or your scope is wrong. Return `state: blocked` and let Phobos decide.
+**Hard stop counter (3 strikes — out)**: if ANY of these counters hit 3, STOP immediately:
+
+- 3+ bash commands returning errors or empty output;
+- 3+ Write / Edit calls rejected by the permission system (this is the most common one — happens when the pattern doesn't match the path);
+- 3+ attempts at any single deliverable (eg. README.md) without successful verify.
+
+Return `state: blocked` con detalle:
+
+```
+state: blocked
+reason: hard stop reached — <write/bash/verify> failed N times consecutivos.
+attempted_path: <último path>
+attempted_pattern_observed: <si OpenCode te mostró el pattern en el error>
+suggestion: probable mismatch entre cwd y el pattern de permission.edit. Phobos
+  debería confirmar project_root y/o re-actualizar los templates del agente.
+```
+
+**Bajo ningún concepto** te vayas a explorar `~/.config/opencode/`, `~/.config/claude/`, ni paths globales del user buscando "debuggear" la causa. Eso ES la causa: te quedaste sin scope. Devolvé `state: blocked` y dejá que Phobos lo resuelva.
 
 ### Mandatory traceability
 Every file you write or edit **replaces** the HTML comment line with the current timestamp:

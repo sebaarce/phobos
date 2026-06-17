@@ -6,11 +6,10 @@ temperature: 0.2
 permission:
   edit:
     "*": deny
-    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad — necesario
-    # cuando OpenCode resuelve los path patterns desde el git root en monorepos
-    # con .opencode/ en un subdir (ej: git root en `payments-api/`, .opencode en
-    # `payments-api/payment-api/.opencode/`). Sin el `**/`, el pattern matchea
-    # solo `<git-root>/vault/...` y los writes a `<subdir>/vault/...` fallan silently.
+    # Doble pattern (bare + `**/`): cubre proyecto plano (cwd == project root)
+    # Y monorepo nesteado (.opencode/ en subdir). Algunos globs no tratan
+    # `**/` como "cero o más segmentos" — por eso necesitamos las dos versiones.
+    "vault/memory/tasks/*/requirements.md": allow
     "**/vault/memory/tasks/*/requirements.md": allow
   bash:
     "*": deny

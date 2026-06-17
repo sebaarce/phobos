@@ -6,9 +6,9 @@ temperature: 0.1
 permission:
   edit:
     "*": deny
-    # `**/vault/...` (not bare `vault/...`) matchea a cualquier profundidad — necesario
-    # en monorepos con .opencode/ en un subdir (OpenCode resuelve paths desde
-    # el git root, no desde .opencode/). Ver planner-hard.md para detalle.
+    # Doble pattern (bare + `**/`): cubre proyecto plano y monorepo nesteado.
+    # Ver planner-hard.md para detalle del por qué.
+    "vault/memory/tasks/*/plan.md": allow
     "**/vault/memory/tasks/*/plan.md": allow
   bash:
     "*": deny

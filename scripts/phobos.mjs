@@ -31,7 +31,7 @@ import { printHeader, showHappyGoodbye, showSadGoodbye } from './lib/banners.mjs
 import { WIZARD_CANCELLED, finalizeAndExit, runAction } from './lib/exit.mjs';
 import { tuiSelect, tuiMultiSelect } from './lib/tui.mjs';
 import { ensureBootstrap } from './lib/bootstrap.mjs';
-import { scanForUpdates, actionUpdateAgents, actionUpdateAgentsMultiIDE } from './lib/update.mjs';
+import { scanForUpdates, actionUpdateAgents, actionUpdateAgentsMultiIDE, proactiveUpdateCheck } from './lib/update.mjs';
 import { actionSetModels, actionViewModels } from './lib/models.mjs';
 import { actionInstallTools, actionCodeGraph, detectCodeGraphStatus } from './lib/tools.mjs';
 import { runChild } from './lib/child.mjs';
@@ -649,6 +649,22 @@ async function main() {
     console.error('  Algo salió mal con el bootstrap. Verificá los permisos de escritura.');
     finalizeAndExit(1);
     return;
+  }
+
+  // Proactive update check — si hay templates outdated o missing en este
+  // proyecto, ofrecer aplicarlos ANTES de entrar al menú. Sin esto el user
+  // se olvida de updatear y corre tasks con agents viejos (causa #1 de
+  // bugs confusos en sessions: archivist sin reglas de scope, planner sin
+  // BDD split, etc).
+  try {
+    await proactiveUpdateCheck(adapter);
+  } catch (err) {
+    // Si el check falla por algún motivo, no bloquear el wizard — el user
+    // puede actualizar manualmente desde el menú.
+    if (err !== WIZARD_CANCELLED) {
+      console.log(dim('\n  ⚠ Proactive update check falló silenciosamente: ' + (err.message || err)));
+      console.log(dim('  Podés intentar manualmente desde "Actualizar agentes".'));
+    }
   }
 
   // Entrar al menú principal — loop hasta que el usuario elija Salir
