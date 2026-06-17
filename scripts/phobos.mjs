@@ -39,6 +39,7 @@ import { actionMemory } from './lib/memory/index.mjs';
 import { detectQdrantStatus } from './lib/memory/engine.mjs';
 import { OpencodeAdapter } from './lib/adapters/opencode.mjs';
 import { ClaudeAdapter } from './lib/adapters/claude.mjs';
+import { ensureProjectRoot } from './lib/project-root.mjs';
 
 // ═══════════════════════════════════════════════════════════════════
 // Menu principal — stack-based con clear screen entre niveles
@@ -570,6 +571,20 @@ async function main() {
     console.error('  El paquete está mal instalado. Reinstalá con: cd <repo> && npm link');
     finalizeAndExit(1);
     return;
+  }
+
+  // Resolución de project root — si cwd ≠ git root (típico monorepo), preguntar.
+  // Hace process.chdir() al elegido para que todo el resto del wizard use cwd()
+  // contra el dir correcto. Si el user cancela, salida limpia.
+  try {
+    await ensureProjectRoot();
+  } catch (err) {
+    if (err && err.message && /Cancelado/.test(err.message)) {
+      console.log(dim('  ⊘ ' + err.message));
+      finalizeAndExit(0);
+      return;
+    }
+    throw err;
   }
 
   // Auto-detect: ¿hay una instalación previa de algún IDE en este proyecto?
