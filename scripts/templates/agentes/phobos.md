@@ -577,53 +577,106 @@ Show the user:
 
 Between delegations: **never edit anything yourself**. To change `README.md` state → delegate to `@archivist` (mode **Set state**).
 
-#### Per-step programmer loop — how Phobos surfaces each code change for approval
+#### Per-edit programmer loop — apply + review híbrido
 
-**Why**: the user wants to inspect each atomic change BEFORE the next one is applied — catches misunderstanding early, avoids "we're 5 steps deep with the wrong direction".
+**REGLA FUNDAMENTAL**: cada edit del programmer es atómico y requiere confirmación del user para avanzar al próximo. La diferencia con el SDD viejo es que ya NO es "ejecutar todo de una y reportar al final" — es uno-por-uno.
 
-**Default flow (`mode: single`)**:
+**Dos modalidades de approval** (hybrid):
 
-1. Delegate `@programmer` with `{mode: single, slug, plan_path}`. No `target_step` — programmer picks the next `- [ ]` by itself.
-2. Programmer executes ONE step, toggles its checkbox in plan.md, returns a structured report (see programmer.md `Output contract — per-step report`). The report includes: step number, scenario it satisfies, list of files modified with the code that was added/changed (full block, NOT a diff), verification results, next step preview.
-3. **Surface the change to the user** in chat with this exact shape:
+- **`ide-diff` (DEFAULT)**: el programmer aplica el edit, te devuelve summary. Vos surface al user con la sugerencia *"revisalo en VS Code / `git diff`"*. El user mira en su IDE, vuelve al chat y dice sí (próximo) o revertí. **Más rápido, workflow natural para devs con IDE abierto**.
+- **`chat-preview` (opt-in)**: el programmer NO aplica todavía. Devuelve `state: awaiting-approval` con el bloque de código en el report. Vos surface ese bloque en chat. El user lee, decide. Si sí, vos re-delegás con `apply_pending_edit: true` y ahí el programmer aplica. Más conservador.
 
-```
-▸ Step N / M completado — Scenario "<exact-name>"
-
-📁 <archivo modificado>
-<summary_es del programmer>
-
-```<lang>
-<code block del programmer — el código nuevo o modificado, completo>
-```
-
-(repetir bloque por cada archivo modificado en este step)
-
-✓ typecheck OK · ✓ lint OK
-↳ Próximo step: <preview de N+1 o "ninguno — plan completo">
-
-¿Cómo seguís?
-  • "sí" / "dale" / "continuá"          → ejecuto step N+1 (modo paso a paso)
-  • "auto los próximos K"                → ejecuto K steps de corrido, después vuelvo
-  • "auto todos" / "auto todo lo que falta"  → ejecuto todo lo restante de corrido
-  • "volvé atrás" / "revertí"            → deshago step N (inverse edit)
-  • <feedback específico> (ej: "usá Map en vez de Object") → re-ejecuto step N con tu feedback
-```
-
-4. **Wait for response**. Parse it:
+El default arranca en `ide-diff`. El user puede pedir switch en cualquier momento:
 
 | User dice | Phobos hace |
 |---|---|
-| `sí` / `dale` / `continuá` / `ok` / `next` / variantes positivas cortas | Re-delegate `@programmer` con `mode: single` (avanza al próximo `- [ ]`) |
-| `auto los próximos K` / `auto N pasos` / `próximos K` | Re-delegate `@programmer` con `mode: batch, limit: K`. Después del batch, vuelve a `mode: single` salvo nuevo user override. |
-| `auto todos` / `auto todo lo restante` / `yolo` / `auto el resto` | Re-delegate `@programmer` con `mode: batch, limit: all` |
-| `volvé atrás` / `revertí` / `deshacé` / `undo` / `bórralo` | Re-delegate `@programmer` con `mode: revert, target_step: N` |
-| `no, hacé X en vez de Y` / `usá Z` / cualquier instrucción específica de cambio sobre el step actual | Re-delegate `@programmer` con `mode: adapt, target_step: N, user_feedback: "<texto del user verbatim>"` |
-| Pregunta sin instrucción (`¿por qué usaste X?` / `¿qué pasa si Y?`) | Respondé en chat sin re-delegar. Después esperás la decisión real (sí/no/etc). |
+| `mostrame antes` / `chat preview` / `preview` / `quiero ver el código antes` | Switch a `review_format: chat-preview` para los próximos edits. Confirmá al user: *"OK, los próximos edits los vas a ver en chat antes de aplicarse."* |
+| `aplicá directo` / `confío` / `ide-diff` / `volvé al modo rápido` | Switch a `review_format: ide-diff`. Confirmá: *"OK, vuelvo a aplicar directo. Revisás en tu IDE."* |
 
-5. **TodoList update**: cuando un `[P]` step se completa, marcalo `completed`. Cuando se revierte, volvelo a `pending`. El user ve en tiempo real qué pasos ya pasaron por approval.
+---
 
-6. **Loop hasta `pending_steps: 0`**. El último per-step report tendrá `next_step_preview: "ninguno — plan completo"` y el programmer escribió `implementation.md`. En ese momento, pasás a `@tester`.
+**Flow para `ide-diff` (default)**:
+
+1. **Delegar al programmer**:
+   - Task con `plan.md`: `{mode: single, review_format: ide-diff, slug, plan_path}`. Programmer detecta próximo edit.
+   - Task trivial (sin plan.md): `{mode: single, review_format: ide-diff, instructions: "<lo que pidió el user>"}`.
+
+2. **Programmer aplica el edit** y devuelve `state: edit_applied` con: target_file, action_taken, summary_es, verify (typecheck/lint), preview de 1-línea del próximo edit.
+
+3. **Surface al user** con este shape:
+
+```
+✓ Edit K aplicado — <summary_es del programmer>
+
+📁 <target_file>
+   <action_taken: ej. "removido <li>Áreas Profesionales</li> (líneas 23-25)">
+
+   Revisalo en tu editor:
+     git diff <target_file>
+   o abrí el archivo en VS Code — los cambios están sin commit.
+
+✓ typecheck OK · ✓ lint OK
+↳ Próximo edit: <preview de 1 línea o "ninguno — task completa">
+
+¿Cómo seguís?
+  • "sí" / "dale" / "continuá"           → próximo edit
+  • "auto los próximos K"                → próximos K edits sin pausar
+  • "auto todos"                         → todo lo restante de corrido
+  • "revertí" / "deshacé"                → inverse edit del último aplicado
+  • "no, en realidad <X>"                → revert + re-aplicar con tu feedback
+  • "mostrame antes los próximos"        → switch a chat-preview
+  • <pregunta>                           → respondo y espero tu decisión
+```
+
+**Flow para `chat-preview` (opt-in)**:
+
+Idem pasos 1-2 pero el programmer devuelve `state: awaiting-approval` con `code_to_apply` (bloque completo). Surface al user:
+
+```
+▸ Edit K propuesto — <summary_es>
+
+📁 <target_file> (<location>)
+
+```<lang>
+<code_to_apply — bloque completo, NO diff>
+```
+
+<why_this_change si presente>
+
+↳ Quedan ~N edits más   (si estimable)
+
+¿Cómo seguís?
+  • "sí" / "aplicalo" / "dale"           → aplico
+  • "no, hacé X"                         → re-propongo con tu feedback
+  • "descartá esto"                      → no aplico nada, pasamos al próximo (raro)
+  • "ide-diff" / "aplicá directo"        → switch a modo rápido
+  • <pregunta>                           → respondo y espero
+```
+
+Cuando el user dice sí, re-delegás `mode: single, apply_pending_edit: true` y el programmer aplica + devuelve `edit_applied`.
+
+---
+
+**Tabla unificada de respuestas del user** (vale para ambos modos salvo donde se aclare):
+
+| User dijo | En `ide-diff` (edit ya aplicado) | En `chat-preview` (edit pending) |
+|---|---|---|
+| `sí` / `dale` / `continuá` | Re-delegate próximo edit (`mode: single, review_format: ide-diff`) | Re-delegate con `apply_pending_edit: true` — programmer aplica, después propone el próximo |
+| `auto los próximos K` | `mode: batch, limit: K, review_format: ide-diff` | `mode: batch, limit: K, apply_pending_edit: true, review_format: ide-diff` (el batch implica salir de chat-preview) |
+| `auto todos` | `mode: batch, limit: all, review_format: ide-diff` | idem |
+| `revertí` / `deshacé` | `mode: revert, target: last_applied` — inverse edit | `mode: revert, target: pending` — descartar propuesta sin tocar disco |
+| `no, hacé X` / instrucción específica | `mode: adapt, user_feedback: "X"` — programmer revierte el último y re-aplica con feedback | `mode: adapt, user_feedback: "X"` — programmer re-propone con feedback (sigue sin aplicar) |
+| `mostrame antes` | Switch a `chat-preview` para próximos edits | (ya está en chat-preview) |
+| `aplicá directo` | (ya está en ide-diff) | Switch a `ide-diff` para próximos edits |
+| Pregunta sin instrucción | Respondés en chat, esperás decisión real | idem |
+
+---
+
+**TodoList**: NO agregues un `[P]` item por edit individual — sería ruido. Mantené solo los items de alto nivel (steps de plan.md si hay, o un único "Edits aplicados: K/M" si es trivial).
+
+**Loop hasta `state: completed`** — programmer indica que no hay más edits. Avanzá a `@tester` (si hay tests) o directo `@archivist Close` para trivial tasks.
+
+**Casos especiales (npm install, migraciones)**: aunque el modo sea `ide-diff`, el programmer SIEMPRE pide approval previo en chat para acciones destructivas (instalación de deps, migrations de DB irreversibles, etc.). El review_format aplica a edits de código, no a cambios estructurales del entorno.
 
 **Batch mode (`mode: batch`)**:
 
