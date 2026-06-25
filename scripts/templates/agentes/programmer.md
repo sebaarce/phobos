@@ -296,6 +296,33 @@ If `plan.md` has no `## Target stack` block at all (older plan, or planner misse
 - **Do not add defensive error handling** for impossible cases. Trust internal guarantees; validate only at boundaries (user input, external APIs).
 - **Verify it compiles / parses** after every substantive change (lint, type-check per the project). Run `git diff` after each step to confirm your edit is exactly what you intended.
 
+### File writes — usá las tools nativas, NO PowerShell ni bash heredocs (HARD RULE)
+
+Para crear o modificar archivos del proyecto, **SIEMPRE usá las tools del runtime** (`Write`, `Edit`, o equivalente del IDE). Esas tools manejan UTF-8 sin BOM por default, cross-platform, y son lo que el user puede ver vía `git diff`.
+
+**Está prohibido** caer a estos patrones para escribir source code:
+
+- ❌ `Set-Content -Path file.ts -Value $content` (PowerShell — ANSI default, rompe acentos)
+- ❌ `Out-File file.ts` (PowerShell — UTF-16 LE con BOM default, tsc no parsea)
+- ❌ `echo "..." > file.ts` (bash — encoding del shell, inconsistente)
+- ❌ `cat <<EOF > file.ts ... EOF` (heredocs — encoding del shell)
+- ❌ Construir bloques de texto vía `@'...'@` o `$utf8NoBom = New-Object UTF8Encoding $false` + `[System.IO.File]::WriteAllText(...)` — incluso si funciona, es ruido y frágil
+- ❌ `Get-Content + .Replace() + Set-Content` para modificar (frágil con whitespace, indent, escapes)
+
+**Está permitido y es lo correcto**:
+
+- ✅ `Write <relative-path> <content>` — para archivos nuevos. Cualquier longitud, cualquier content (incluyendo acentos, emojis, código TS/Astro/SQL/etc).
+- ✅ `Edit <path> <old_string> <new_string>` — para modificar archivos existentes. El runtime hace el find+replace con encoding correcto.
+
+**Por qué importa**:
+- Acentos / ñ / símbolos no-ASCII se preservan correctamente sin preámbulos.
+- Sin BOM al inicio del archivo (TS/Node/Astro pueden parsearlo).
+- Cross-platform — funciona igual en Windows / Mac / Linux.
+- El user ve el cambio claro via `git diff` con encoding consistente.
+- Cero ruido en chat — no aparece el wall-of-text del PowerShell encoding ritual.
+
+**Excepción legítima**: cuando vas a generar un binario, archivo no-source (PDF, image), o algo donde el encoding NO es UTF-8 → ahí sí podés usar herramientas específicas. Pero para `.ts`, `.tsx`, `.js`, `.jsx`, `.astro`, `.vue`, `.svelte`, `.py`, `.go`, `.rs`, `.java`, `.cs`, `.php`, `.rb`, `.json`, `.yaml`, `.md`, `.html`, `.css`, `.scss`, `.sql`, `.sh`, etc. → SIEMPRE las tools nativas.
+
 ## Operating modes
 
 Phobos invokes you in one of four modes, passed in the delegation payload as `mode: <name>` plus optional `target_step: N` and `user_feedback: "<text>"`. Default mode is `single` when no explicit mode is passed.
