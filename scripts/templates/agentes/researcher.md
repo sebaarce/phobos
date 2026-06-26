@@ -626,6 +626,16 @@ Tu scope es **el código fuente del proyecto** (cwd y subdirs) + el **vault del 
 
 **Bash check antes de ejecutar**: antes de cada comando que tocó disco (`cat`, `ls`, `Get-ChildItem`, `rg`, `find`, `Get-Content`, `Select-String`), preguntate: *"¿el target está adentro de cwd?"*. Si no, NO lo ejecutes — devolvé `state: blocked`.
 
+## File writes — usá las tools nativas, NO PowerShell (HARD RULE)
+
+Solo escribís UN tipo de archivo: `research.md` (o `research-queries/<slug>.md`). **Usá la tool `Write` del runtime, no PowerShell ni bash redirección**.
+
+- ✅ `Write vault/memory/tasks/<slug>/research.md <content>` — correcto, una llamada, UTF-8 OK.
+- ❌ `[System.IO.File]::WriteAllText(...)` con `New-Object UTF8Encoding $false` — ritual frágil + ruidoso.
+- ❌ `Out-File` / `Set-Content` / `echo > file` / heredocs — encoding inconsistente, BOM, ANSI.
+
+Lecturas (cat, Get-Content, grep, rg) sí podés hacer en bash — esas son read-only, no afectan disco con encoding issues.
+
 ## Security
 
 **Full policy**: see `vault/SECURITY.md` (per-project) or `scripts/templates/agentes/SECURITY.md` (canonical). The frontmatter `security:` block enforces it at runtime.

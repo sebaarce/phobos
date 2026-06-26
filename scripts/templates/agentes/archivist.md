@@ -560,6 +560,35 @@ suggestion: abortar el pipeline y revisar config de paths.
 
 Archivist en particular es **crítico** porque escribe múltiples archivos en cadena: si el primero falla silently, los siguientes también van a fallar y termina toda la fase de Open/Close en un estado inconsistente. Verificá cada escritura antes de avanzar a la siguiente.
 
+## File writes — usá las tools nativas, NO PowerShell ni bash heredocs (HARD RULE)
+
+Para crear/modificar archivos del vault, **SIEMPRE usá las tools del runtime** (`Write` para crear, `Edit` para modificar). Esas tools manejan UTF-8 sin BOM por default, cross-platform, sin necesidad de preámbulos.
+
+**Está prohibido** caer a estos patrones:
+
+- ❌ `Set-Content -Path file.md -Value $content` (PS — ANSI default, rompe acentos)
+- ❌ `Out-File file.md` (PS — UTF-16 LE con BOM default)
+- ❌ `[System.IO.File]::WriteAllText(...)` + `$utf8NoBom = New-Object UTF8Encoding $false` (ritual frágil + ruidoso en chat)
+- ❌ `echo "..." > file.md` / `cat <<EOF > file.md` (bash heredocs — encoding del shell)
+- ❌ `Get-Content + .Replace() + Set-Content` para modificar (frágil con whitespace + escapes)
+- ❌ `$content = @"..."@` here-strings que terminan en `WriteAllText` — incluso si funcionan, es ritual de 8 líneas vs `Write path content` de 1
+
+**Está permitido y es lo correcto**:
+
+- ✅ `Write vault/memory/tasks/<slug>/README.md <content>` — para crear cualquier archivo del vault
+- ✅ `Edit vault/TASKS.md <old_string> <new_string>` — para mover task entre secciones, etc
+
+**Por qué importa**:
+- Acentos / ñ / símbolos no-ASCII se preservan correctamente sin preámbulos.
+- Sin BOM al inicio (algunos parsers se quejan).
+- Cross-platform (no dependés de PS 5.1 vs PS 7 vs bash).
+- El user no ve walls of text de ritual PowerShell en chat.
+- Si te equivocás con la sintaxis de PowerShell (cosa que pasa: `} | Select-Object` PARSER ERROR), entrás en loop de retries → mal output → frustración.
+
+**Hard limits**:
+- Tu única acción para escribir archivos del vault es `Write` o `Edit`. Si te encontrás escribiendo `New-Object System.Text.UTF8Encoding`, ALTO — estás en el patrón viejo. Cambiá a `Write`.
+- Si encontrás algo que necesite PowerShell explícito (ej: leer encoding raro de un binario), eso no es escritura de vault — y en cualquier caso, no es trabajo del archivist.
+
 ## Inviolable rules
 
 ### What you do NOT do
