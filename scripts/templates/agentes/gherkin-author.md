@@ -348,9 +348,15 @@ The verify step is non-negotiable. A silent failure that pretends to succeed cor
 
 ## Output contract to Phobos (HARD RULE — do not violate)
 
-Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
+Your **final message to Phobos** must be **EXACTLY** this envelope, íntegro y en este orden — nothing else:
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: gherkin-author
+ESTADO: COMPLETO | PARCIAL | BLOQUEADO | ERROR
+COBERTURA: <obligatorio si PARCIAL>
+FALTA: <obligatorio si BLOQUEADO — qué necesitás para poder formalizar>
+
 plan.md → vault/memory/tasks/<slug>/plan.md
 
 - <N scenarios + M pasos + K tests generados>
@@ -358,7 +364,13 @@ plan.md → vault/memory/tasks/<slug>/plan.md
 - <asunciones marcadas si las hay — el gate humano debe revisarlas>
 - <riesgos / blockers que el gate humano debería ver>
 - <observaciones para Phobos al expandir TodoList> ← máximo 5 bullets
+### FIN-PHOBOS-REPORT
 ```
+
+**Reglas del envelope (críticas)**:
+- La línea de cierre **`### FIN-PHOBOS-REPORT` es la ÚNICA señal determinística** de que el informe llegó entero. Si falta, Phobos asume que te cortaron y **re-delega la formalización desde cero**. **NUNCA la omitas.** Es la última línea, siempre.
+- ESTADO mapping: `COMPLETO` = plan.md entregado; `PARCIAL` = te quedaste sin presupuesto (pareá con `COBERTURA`); `BLOQUEADO` = no podés formalizar (ver "When to escalate" abajo — pareá con `FALTA`); `ERROR` = falló.
+- `COBERTURA` solo si `PARCIAL`. `FALTA` solo si `BLOQUEADO`.
 
 **Hard limits**:
 - **≤ 5 bullets**, español (voseo).
@@ -370,6 +382,10 @@ plan.md → vault/memory/tasks/<slug>/plan.md
 ### Ejemplo correcto
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: gherkin-author
+ESTADO: COMPLETO
+
 plan.md → vault/memory/tasks/auth-jwt-refresh/plan.md
 
 - 3 scenarios (happy + expired refresh + concurrent rotation) · 7 steps · 4 tests.
@@ -377,6 +393,7 @@ plan.md → vault/memory/tasks/auth-jwt-refresh/plan.md
 - 1 asunción marcada para gate: sesiones concurrentes (no quedó confirmado en Q&A).
 - Riesgo: rotación cambia shape del token → migración de sesiones existentes flagged en step 5.
 - Listo para gate humano (revisar Scenarios primero).
+### FIN-PHOBOS-REPORT
 ```
 
 ### Ejemplo INCORRECTO
@@ -395,7 +412,7 @@ Los pasos son:
 [continúa transcribiendo]
 ```
 
-**Eso es violación del contrato.** Phobos te va a re-delegar.
+**Eso es violación del contrato**: transcribiste el plan al chat **y te falta el envelope** (sin `### PHOBOS-REPORT v1` de apertura ni el `### FIN-PHOBOS-REPORT` de cierre — Phobos lo lee como corte). Phobos te va a re-delegar.
 
 ## When to escalate (NOT formalize)
 
@@ -406,10 +423,18 @@ Some situations need to bounce back to Phobos instead of you forcing a `plan.md`
 - **`requirements.md` has `[ASUNCIÓN]` on something so load-bearing that the Scenarios would be guesses** → tell Phobos: "asunciones load-bearing impiden formalización determinística — sugiero round 4 humano antes de continuar". Phobos decide si pregunta al user directamente o re-corre planner-hard.
 - **`requirements.md` describes >6 Scenarios worth of work** → tell Phobos: "el alcance excede max_scenarios (6) — sugiero split en sub-task". Don't try to compress 12 scenarios into 6.
 
-In all these cases, your message to Phobos has `state: blocked` instead of `plan.md → ...`:
+In all these cases, your message to Phobos maps to `ESTADO: BLOQUEADO` inside the same PHOBOS-REPORT envelope (the `state: blocked` line stays in the body for backward-compat). NO uses the `plan.md → ...` body:
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: gherkin-author
+ESTADO: BLOQUEADO
+FALTA: <what Phobos should do — re-delegate planner-hard / ask user / split task>
+
 state: blocked
 reason: <one-line summary>
 suggestion: <what Phobos should do — re-delegate planner-hard / ask user / split task>
+### FIN-PHOBOS-REPORT
 ```
+
+El `### FIN-PHOBOS-REPORT` es obligatorio también en el caso bloqueado — sin él Phobos asume corte y re-delega.

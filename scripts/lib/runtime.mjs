@@ -25,7 +25,7 @@ export const PKG_VERSION = (() => {
   }
 })();
 
-// Lista de agentes — IDE-agnostic. Estos 7 agentes existen en cualquier
+// Lista de agentes — IDE-agnostic. Estos 8 agentes existen en cualquier
 // target del Phobos (OpenCode, Claude Code, etc.) con los mismos roles;
 // solo cambia el formato del frontmatter, que lo maneja el adapter.
 //
@@ -33,7 +33,12 @@ export const PKG_VERSION = (() => {
 // vía Q&A iterativo, hasta 3 rondas) + 'gherkin-author' (formalización a
 // Gherkin / Steps / Tests con trazabilidad). Pipeline BDD. Los proyectos con
 // 'planner.md' viejo deben migrar vía "Actualizar agentes" en el wizard.
-export const AGENTS = ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist'];
+//
+// 'reviewer' (auditoría read-only on-demand) se sumó portando lo mejor del
+// sistema agent-cargo. phobos lo invoca cuando el diff es no-trivial o el
+// usuario pide auditar; nunca escribe el fix — describe cada hallazgo con
+// severidad + archivo:línea + escenario de fallo.
+export const AGENTS = ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'reviewer', 'archivist'];
 
 // Lista del agente legacy reemplazado por la nueva arquitectura BDD.
 // El update wizard mira esta lista para detectar instalaciones viejas y
@@ -60,6 +65,7 @@ export const AGENT_PROFILES = {
   'gherkin-author':{ role: 'formalización estructurada' },
   programmer:      { role: 'código' },
   tester:          { role: 'tests, barato' },
+  reviewer:        { role: 'auditoría read-only' },
   archivist:       { role: 'prosa, distilar' },
 };
 

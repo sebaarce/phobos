@@ -956,6 +956,25 @@ If any answer is "no", **do NOT declare the task complete**. Report what's missi
 
 ## Output contract to Phobos (HARD RULE — do not violate)
 
+### PHOBOS-REPORT envelope — aplica a TODOS tus return states (regla base)
+
+**Every final message to Phobos — no matter which state block it carries** (`awaiting-approval`, `edit_applied`, `completed`, `blocked`, batch report, revert report) — MUST begin with the `### PHOBOS-REPORT v1` header (con `AGENTE: programmer` + `ESTADO`) and end with the `### FIN-PHOBOS-REPORT` sentinel. The existing state block goes **inside** as the body, sin cambios.
+
+```
+### PHOBOS-REPORT v1
+AGENTE: programmer
+ESTADO: COMPLETO | PARCIAL | BLOQUEADO | ERROR
+COBERTURA: <obligatorio si PARCIAL>
+FALTA: <obligatorio si BLOQUEADO>
+
+<el state block que corresponda: awaiting-approval / edit_applied / completed / blocked / batch / revert — tal cual está definido arriba>
+### FIN-PHOBOS-REPORT
+```
+
+- **`### FIN-PHOBOS-REPORT` es la ÚNICA señal determinística** de que el mensaje llegó entero. Si falta, Phobos asume que te cortaron a mitad y **re-delega**. **NUNCA la omitas** — es la última línea, siempre. (Un `awaiting-approval` sin sentinel se lee como corte y Phobos re-pide el edit.)
+- ESTADO mapping: estados normales (`awaiting-approval`, `edit_applied`, `completed`, batch/revert OK) → `ESTADO: COMPLETO`; `state: blocked` → `ESTADO: BLOQUEADO` (pareá con `FALTA`, y dejá el `state: blocked` en el body); te cortaron / batch partial → `ESTADO: PARCIAL` (pareá con `COBERTURA`).
+- `COBERTURA` solo si `PARCIAL`. `FALTA` solo si `BLOQUEADO`. El resto del contrato (los shapes de cada state, hard limits, prohibiciones) queda idéntico — el envelope solo lo envuelve.
+
 Of all the subagents, **you are the one most likely to flood the parent's context** because you naturally have "code to show" (diffs, files written, commands run). **Do not show it.** It is already in `implementation.md` and in the files you touched on disk. Phobos reads the file when it needs the content.
 
 Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
@@ -995,6 +1014,10 @@ implementation.md → vault/memory/tasks/<slug>/implementation.md
 ### Ejemplo correcto
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: programmer
+ESTADO: COMPLETO
+
 implementation.md → vault/memory/tasks/auth-jwt-refresh/implementation.md
 
 - 7/7 pasos del plan completados; checkboxes en plan.md actualizados.
@@ -1002,6 +1025,7 @@ implementation.md → vault/memory/tasks/auth-jwt-refresh/implementation.md
 - `npm run build` OK, `npm test` OK (32 passing).
 - Skill `jwt-best-practices` consultado lazy para rotación; sin desvíos del plan.
 - Listo para tester.
+### FIN-PHOBOS-REPORT
 ```
 
 ### Ejemplo INCORRECTO (NO hagas esto)
@@ -1027,4 +1051,4 @@ PASS tests/auth.test.ts
   ✓ should rotate token (15 ms)
 [continúa el output de Jest]
 ```
-**Eso es la violación más cara del contrato.** Phobos te va a re-delegar.
+**Eso es la violación más cara del contrato**: pegaste código, diffs y output al chat **y encima no hay envelope** (falta el `### PHOBOS-REPORT v1` de apertura y el `### FIN-PHOBOS-REPORT` de cierre — sin ese sentinel Phobos lo lee como corte). Phobos te va a re-delegar.

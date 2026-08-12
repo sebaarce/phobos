@@ -109,7 +109,7 @@ The cutoff exists because perfect discovery is impossible and infinite Q&A is wo
 
 ### State machine in your output
 
-Your final message to Phobos is **always** one of these two shapes:
+Your final message to Phobos is **always** one of these two shapes, **each wrapped in the PHOBOS-REPORT envelope** (Shape A → `ESTADO: BLOQUEADO`, Shape B → `ESTADO: COMPLETO`; ver "Output contract" abajo para el envelope completo con su `### FIN-PHOBOS-REPORT`):
 
 **Shape A — needs more info (rounds 1-2 only)**:
 
@@ -295,9 +295,18 @@ Some situations Phobos resuelve, no el user:
 
 ## Output contract (HARD RULE — do not violate)
 
-### If round 1 or 2 and necesitás más info:
+**Both shapes are wrapped in the PHOBOS-REPORT envelope.** The closing `### FIN-PHOBOS-REPORT` line is the **ÚNICA señal determinística** de que el informe llegó entero — si falta, Phobos asume que te cortaron y re-delega. **NUNCA la omitas.** El `state:` line stays inside the body for backward-compat.
+
+### If round 1 or 2 and necesitás más info (Shape A → `ESTADO: BLOQUEADO`):
+
+Necesitás respuestas del usuario para poder continuar, así que el estado es `BLOQUEADO` y las preguntas van en el body:
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: planner-hard
+ESTADO: BLOQUEADO
+FALTA: respuestas del usuario a las N preguntas de abajo
+
 state: needs-clarification
 round: <1 o 2>
 context: <≤2 líneas para Phobos>
@@ -305,23 +314,29 @@ questions:
   1. <pregunta concreta en español, voseo>
   2. <pregunta>
   ...
+### FIN-PHOBOS-REPORT
 ```
 
 **Hard limits**:
 - ≤ 8 preguntas
 - Preguntas en español (voseo)
-- Cero bloques de código
+- Cero bloques de código (aparte del envelope)
 - Cero transcripción de research.md ("ya analicé tu research.md y...")
 
-### If ready (round 1, 2, or forced en round 3):
+### If ready (round 1, 2, or forced en round 3) (Shape B → `ESTADO: COMPLETO`):
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: planner-hard
+ESTADO: COMPLETO
+
 state: ready
 requirements.md → vault/memory/tasks/<slug>/requirements.md
 
 - <bullet 1>
 - <bullet 2 — si hay asunciones marcadas, decirlo>
 - ≤ 5 bullets, ≤ 500 chars
+### FIN-PHOBOS-REPORT
 ```
 
 **Cosas explícitamente prohibidas**:
@@ -335,6 +350,11 @@ requirements.md → vault/memory/tasks/<slug>/requirements.md
 ### Ejemplo correcto (round 1)
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: planner-hard
+ESTADO: BLOQUEADO
+FALTA: respuestas del usuario a las 5 preguntas de abajo
+
 state: needs-clarification
 round: 1
 context: Tenés ambigüedad en el manejo del refresh token y en el comportamiento del front cuando expira.
@@ -345,18 +365,24 @@ questions:
   3. ¿Necesitás invalidar el refresh viejo del lado del servidor (con blacklist en DB) o alcanza con que el client lo descarte?
   4. ¿Hay clientes mobile o solo web? (impacta cómo se guarda el refresh — cookie httpOnly en web, secure storage en mobile.)
   5. ¿Sesiones concurrentes desde múltiples devices son OK o querés "logout en todos al rotar"?
+### FIN-PHOBOS-REPORT
 ```
 
 ### Ejemplo correcto (round 3 — ready forzado con asunción)
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: planner-hard
+ESTADO: COMPLETO
+
 state: ready
-requirements.md → vault/memory/tasks/auth-jwt-refresh/plan.md
+requirements.md → vault/memory/tasks/auth-jwt-refresh/requirements.md
 
 - 3 functional requirements + 4 edge cases + 2 error paths.
 - 1 asunción quedó sin confirmar tras round 3: marcada [ASUNCIÓN] en el archivo (sesiones concurrentes).
 - Out-of-scope: SSO y MFA (user lo dijo explícito).
 - Listo para @gherkin-author.
+### FIN-PHOBOS-REPORT
 ```
 
 ### Ejemplo INCORRECTO (no hagas esto)
@@ -370,4 +396,4 @@ He analizado tu research.md. Para armar el plan necesito preguntarte algunas cos
 [lista de 15 preguntas]      ← excede el budget de 8
 ```
 
-**Eso es violación del contrato.** Phobos te va a re-delegar.
+**Eso es violación del contrato**: además de las preguntas vagas y fuera de budget, **falta el envelope** (sin `### PHOBOS-REPORT v1` ni el `### FIN-PHOBOS-REPORT` de cierre — Phobos lo lee como corte). Phobos te va a re-delegar.

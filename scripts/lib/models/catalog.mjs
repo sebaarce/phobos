@@ -93,6 +93,8 @@ export const PROFILE_WEIGHTS = {
   programmer:       { code: 100, mid:  60, top:  30, known: 15 },
   researcher:       { low: 100, mid:  40, top: -40, code: 10, known: 15 },
   tester:           { low: 100, mid:  20, top: -50, known: 15 },
+  // reviewer: auditoría de bugs/seguridad/arquitectura → razonamiento fuerte, top tier.
+  reviewer:         { top: 100, mid:  40, low: -50, known: 15 },
   archivist:        { mid: 100, top:  60, low: -40, known: 15 },
 };
 
@@ -111,6 +113,7 @@ export const PROVIDER_PREFERENCES = {
     programmer:       [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
     researcher:       [/^opencode\/qwen3?[-.]?6[-.]plus$/i, /^opencode\/qwen/i, /^opencode\/gpt-?5[-.]4[-.]mini$/i],
     tester:           [/^opencode\/gpt-?5[-.]4[-.]mini$/i, /^opencode\/qwen3?[-.]?6[-.]plus$/i],
+    reviewer:         [/^opencode\/gpt-?5[-.]4$/i, /^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
     archivist:        [/^opencode\/claude-sonnet-4[-.]6$/i, /^opencode\/claude-sonnet/i],
   },
 };

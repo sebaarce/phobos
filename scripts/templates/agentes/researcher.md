@@ -673,9 +673,15 @@ If any answer is "no", **do NOT deliver the research**. Ask Phobos for more cont
 
 ## Output contract to Phobos (HARD RULE — do not violate)
 
-Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
+Your **final message to Phobos** must be **EXACTLY** this envelope, íntegro y en este orden — nothing else:
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: researcher
+ESTADO: COMPLETO | PARCIAL | BLOQUEADO | ERROR
+COBERTURA: <obligatorio si PARCIAL — qué quedó sin investigar>
+FALTA: <obligatorio si BLOQUEADO — qué necesitás para poder investigar>
+
 research.md → vault/memory/tasks/<slug>/research.md
 
 - <bullet 1 en español, ≤20 palabras>
@@ -683,7 +689,13 @@ research.md → vault/memory/tasks/<slug>/research.md
 - <bullet 3>
 - <bullet 4>
 - <bullet 5> ← máximo
+### FIN-PHOBOS-REPORT
 ```
+
+**Reglas del envelope (críticas)**:
+- La línea de cierre **`### FIN-PHOBOS-REPORT` es la ÚNICA señal determinística** de que el informe llegó entero. Si falta, Phobos asume que te cortaron (te quedaste sin presupuesto) y **re-delega todo el research desde cero**. **NUNCA la omitas.** Es la última línea, siempre.
+- ESTADO mapping: `COMPLETO` = research entregado entero; `PARCIAL` = te quedaste sin presupuesto (pareá con `COBERTURA`); `BLOQUEADO` = necesitás algo, típicamente el `state: blocked` de verify-after-write (pareá con `FALTA`); `ERROR` = falló.
+- `COBERTURA` solo si `PARCIAL`. `FALTA` solo si `BLOQUEADO`.
 
 **Hard limits**:
 - **≤ 5 bullets**, español.
@@ -707,6 +719,10 @@ research.md → vault/memory/tasks/<slug>/research.md
 ### Ejemplo correcto
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: researcher
+ESTADO: COMPLETO
+
 research.md → vault/memory/tasks/auth-jwt-refresh/research.md
 
 - Stack detectado: Express 4 + jsonwebtoken; tests con Jest.
@@ -714,6 +730,7 @@ research.md → vault/memory/tasks/auth-jwt-refresh/research.md
 - No hay AGENTS.md — agregué nota en Open questions.
 - 2 endpoints relevantes identificados; detalle en research.md.
 - Semantic search devolvió 3 insights previos relacionados (incluidos).
+### FIN-PHOBOS-REPORT
 ```
 
 ### Ejemplo INCORRECTO (no hagas esto)
@@ -730,4 +747,4 @@ The task is to implement JWT refresh token...
 - Framework: Express 4.18
 [continúa listando todo el research]
 ```
-**Eso es exactamente lo que NO tenés que hacer.** Phobos va a re-delegar pidiendo que repitas en formato correcto.
+**Eso es exactamente lo que NO tenés que hacer**: transcribiste el archivo al chat **y te falta el envelope entero** (sin `### PHOBOS-REPORT v1` ni el `### FIN-PHOBOS-REPORT` de cierre — Phobos lo lee como corte y re-delega). Phobos va a re-delegar pidiendo que repitas en formato correcto.

@@ -141,8 +141,12 @@ If CodeGraph is not installed: skip the optimization, run the standard suite —
 This is the critical flow — read carefully:
 
 1. **Do NOT write the final `test-report.md` yet.**
-2. **Report to Phobos** the failure in this format:
+2. **Report to Phobos** the failure wrapped in the PHOBOS-REPORT envelope (el fail ES el reporte, y está completo → `ESTADO: COMPLETO`; el sentinel de cierre es igual de obligatorio acá):
    ```
+   ### PHOBOS-REPORT v1
+   AGENTE: tester
+   ESTADO: COMPLETO
+
    ✗ FAIL DETECTED
    - Test: <name>
    - Message: <summarized message from the runner>
@@ -152,6 +156,7 @@ This is the critical flow — read carefully:
      b) Re-run (if it looks flaky)
      c) Skip and document as follow-up
      d) Abandon the task
+   ### FIN-PHOBOS-REPORT
    ```
 3. **Phobos will ask the user** what action to take. **You wait for that decision** — do not assume.
 4. Once decided, you execute what corresponds and, upon stabilization, **only then** you write the final `test-report.md` with the attempt history.
@@ -259,9 +264,15 @@ Same as Programmer: **never `git commit`/`push`/`add`/mutations**. Read-only. Th
 
 ## Output contract to Phobos (HARD RULE — do not violate)
 
-Your **final message to Phobos** must be **EXACTLY** this shape, nothing else:
+Your **final message to Phobos** must be **EXACTLY** this envelope, íntegro y en este orden — nothing else:
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: tester
+ESTADO: COMPLETO | PARCIAL | BLOQUEADO | ERROR
+COBERTURA: <obligatorio si PARCIAL>
+FALTA: <obligatorio si BLOQUEADO>
+
 test-report.md → vault/memory/tasks/<slug>/test-report.md
 
 - <bullet 1: resultado global — ✓ PASS / ✗ FAIL / ⚠ PARTIAL / ⊘ SKIPPED>
@@ -269,7 +280,13 @@ test-report.md → vault/memory/tasks/<slug>/test-report.md
 - <bullet 3: si hay fail, cuál test y causa probable en 1 línea>
 - <bullet 4: coverage gaps relevantes (≤1 línea)>
 - <bullet 5: acción sugerida si hay fail> ← máximo
+### FIN-PHOBOS-REPORT
 ```
+
+**Reglas del envelope (críticas)**:
+- La línea de cierre **`### FIN-PHOBOS-REPORT` es la ÚNICA señal determinística** de que el informe llegó entero. Si falta, Phobos asume que te cortaron y **re-delega la validación desde cero**. **NUNCA la omitas.** Es la última línea, siempre — vale también para el reporte de fallo `✗ FAIL DETECTED` (ver abajo).
+- ESTADO mapping: `COMPLETO` = reporte entregado entero (incluye el `✗ FAIL DETECTED` — el fail ES el reporte, y está completo); `PARCIAL` = te quedaste sin presupuesto con tests sin correr (pareá con `COBERTURA`); `BLOQUEADO` = necesitás algo para poder testear (pareá con `FALTA`); `ERROR` = falló el propio tester.
+- `COBERTURA` solo si `PARCIAL`. `FALTA` solo si `BLOQUEADO`.
 
 **Hard limits**:
 - **≤ 5 bullets**, español.
@@ -291,6 +308,10 @@ test-report.md → vault/memory/tasks/<slug>/test-report.md
 ### Ejemplo correcto (PASS)
 
 ```
+### PHOBOS-REPORT v1
+AGENTE: tester
+ESTADO: COMPLETO
+
 test-report.md → vault/memory/tasks/auth-jwt-refresh/test-report.md
 
 - ✓ PASS — 32 tests, 32 passed, 0 failed.
@@ -298,11 +319,12 @@ test-report.md → vault/memory/tasks/auth-jwt-refresh/test-report.md
 - Agregué 2 tests nuevos para rotación (happy path + edge case token expirado).
 - Coverage gap: rotación bajo carga concurrente (no testeable acá, flagged).
 - Listo para archivist.
+### FIN-PHOBOS-REPORT
 ```
 
 ### Ejemplo correcto (FAIL — flujo especial)
 
-Cuando hay fail, NO escribís `test-report.md` final todavía. Tu mensaje a Phobos es el reporte de fallo del formato `✗ FAIL DETECTED` que ya está documentado más arriba (con las 4 opciones a/b/c/d). Ese formato también respeta el ≤ 400 chars rule.
+Cuando hay fail, NO escribís `test-report.md` final todavía. Tu mensaje a Phobos es el reporte de fallo del formato `✗ FAIL DETECTED` que ya está documentado más arriba (con las 4 opciones a/b/c/d), **envuelto en el envelope PHOBOS-REPORT con `ESTADO: COMPLETO` y cerrado con `### FIN-PHOBOS-REPORT`**. Ese formato también respeta el ≤ 400 chars rule.
 
 ### Ejemplo INCORRECTO (no hagas esto)
 
@@ -318,4 +340,4 @@ Tests Suites: 4 passed
 Tests: 32 passed
 [etc.]
 ```
-**Phobos te va a re-delegar.** El archivo `test-report.md` ya tiene esto.
+**Phobos te va a re-delegar**: dumpeaste el output del runner al chat **y te falta el envelope** (sin `### PHOBOS-REPORT v1` ni el `### FIN-PHOBOS-REPORT` de cierre — se lee como corte). El archivo `test-report.md` ya tiene esto.

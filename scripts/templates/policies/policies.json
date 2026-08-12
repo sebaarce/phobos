@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "protectedPaths": [".opencode/**", ".claude/**", "CLAUDE.md", "AGENTS.md"],
+  "rules": [
+    {
+      "id": "destructivo-fs",
+      "tools": ["Bash"],
+      "pattern": "(?:^|\\s)rm(?=\\s)(?=.*\\s-\\S*r)(?=.*\\s-\\S*f)|\\bfind\\b.*(?:\\s-delete\\b|\\s-exec\\s+\\\\?rm\\b)|\\bxargs\\b(?:\\s+\\S+)*\\s+rm\\b|shutil\\s*\\.\\s*rmtree|\\bfs\\s*\\.\\s*(?:rmSync|rmdirSync|rmdir|rm)\\s*\\(|\\btruncate\\b(?=.*\\s-s)|\\bmv\\s+\\S+(?:\\s+\\S+)*\\s+/dev/null(?:\\s|$)|\\bdd\\b(?=.*\\bof=)|(?:^|\\s|/)mkfs(?:\\.|\\s|$)",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Borrado o destrucción recursiva de archivos"
+    },
+    {
+      "id": "destructivo-fs-win",
+      "tools": ["Bash"],
+      "pattern": "\\bremove-item\\b(?=.*\\s-(?:recurse|force))|\\brd\\b(?=.*\\s/s\\b)|\\bdel\\b(?=.*\\s/[sfq]\\b)|\\bclear-content\\b|\\b(?:pwsh|powershell)(?:\\.exe)?\\b(?=.*\\s-c(?:ommand)?\\b)(?=.*(?:remove-item|clear-content|\\brd\\s+/|\\bdel\\s+/))",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Borrado o destrucción de archivos (PowerShell/CMD)"
+    },
+    {
+      "id": "git-destructivo",
+      "tools": ["Bash"],
+      "pattern": "\\bgit\\b(?:\\s+-c\\s+\\S+|\\s+--\\S+)*\\s+(?:push\\b(?:\\s+\\S+)*\\s+(?:--force(?!-with-lease)\\S*|-f\\b|\\+\\S+)|reset\\b(?=.*\\s--hard\\b)|clean\\b(?=.*\\s-\\S*[fdx])|restore\\b|checkout\\b(?=.*(?:\\s--(?:\\s|$)|\\s\\.(?:\\s|$)))|rm\\b(?=.*\\s-\\S*r)|branch\\b(?=.*\\s-d\\b)|tag\\b(?=.*\\s-d\\b)|push\\b(?=.*\\s--delete\\b)|stash\\s+(?:drop|clear)\\b)",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Operación git destructiva o de reescritura de historia (excepción: --force-with-lease, que es seguro). Incluye borrado de tags: un tag publicado es un release."
+    },
+    {
+      "id": "push-branch-protegida",
+      "tools": ["Bash"],
+      "pattern": "\\bgit\\b(?:\\s+-\\S+)*\\s+push\\b(?:\\s+\\S+)*\\s+(?:\\S+:)?(?:main|master)(?:\\s|$)",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Push directo a main/master: el flujo es MR + merge por API (si es un caso legítimo, que lo corra el humano)"
+    },
+    {
+      "id": "destructivo-sistema",
+      "tools": ["Bash"],
+      "pattern": "(?:^|\\s|/)(?:shred|fdisk|parted)\\b|:\\s*\\(\\s*\\)\\s*\\{[^}]*\\|[^}]*&|\\bchmod\\b(?=.*\\s-R\\b)(?=.*(?:777|a\\+rwx))|>\\s*/dev/(?:sd|nvme|disk|hd)",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Operación destructiva a nivel sistema (discos, fork bomb, permisos 777 recursivos)"
+    },
+    {
+      "id": "pipe-a-shell",
+      "tools": ["Bash"],
+      "pattern": "\\b(?:curl|wget)\\b[^;&]*\\|[^;&|]*\\b(?:sh|bash|zsh|dash|ksh)\\b|\\b(?:irm|iwr|invoke-restmethod|invoke-webrequest)\\b[^;&]*\\|[^;&|]*\\biex\\b|\\binvoke-expression\\b",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Descarga remota ejecutada directamente en un shell"
+    },
+    {
+      "id": "reinvocacion-claude",
+      "tools": ["Bash"],
+      "pattern": "^(?:\\S*[\\\\/])?claude(?:\\.exe|\\.cmd|\\.ps1)?(?:\\s|$)|\\bnpx\\b(?=.*claude-code)|--dangerously-skip-permissions|bypasspermissions|(?:^|\\s)--settings\\b|(?:^|\\s)claude_code_\\w+=",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Re-invocación del CLI de claude o manipulación de su configuración"
+    },
+    {
+      "id": "secretos",
+      "tools": ["Bash", "Read", "Grep", "Glob"],
+      "pattern": "\\.env\\b(?!\\.example\\b)|\\.pem\\b|\\bid_rsa\\b|\\bid_ed25519\\b|\\.ssh[\\\\/]|\\.aws[\\\\/]|credentials|secrets",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Acceso a archivos de secretos o credenciales"
+    },
+    {
+      "id": "sql-destructivo",
+      "tools": ["Bash"],
+      "pattern": "\\b(?:psql|mysql|sqlite3)\\b(?=.*\\s(?:-c\\b|-e\\b|--command\\b|--execute\\b))(?=.*(?:\\bdrop\\s+(?:table|database|schema)\\b|\\btruncate\\s+table\\b|\\bdelete\\s+from\\b(?!.*\\bwhere\\b)))",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Sentencia SQL destructiva inline"
+    },
+    {
+      "id": "interprete-inline",
+      "tools": ["Bash"],
+      "pattern": "\\b(?:python\\d*|node|ruby|perl)(?:\\.exe)?\\b(?=.*\\s-[ce]\\b)(?=.*(?:\\.opencode[\\\\/]|\\.claude\\b|claude\\.md|agents\\.md|\\.env\\b(?!\\.example\\b)|\\.pem\\b|id_rsa|id_ed25519|\\.ssh|\\.aws|credentials|secrets|rmtree|rmSync|rimraf|\\brm\\s+-|unlink))",
+      "flags": "i",
+      "action": "deny",
+      "reason": "Intérprete inline que menciona rutas protegidas, secretos o borrado recursivo"
+    }
+  ]
+}

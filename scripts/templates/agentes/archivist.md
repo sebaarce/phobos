@@ -658,15 +658,23 @@ If you re-run (plan change, fix), **replace**, do not accumulate.
 
 ## Report to Phobos
 
-After each operation, return to Phobos:
+After each operation, return to Phobos wrapping the report in the PHOBOS-REPORT envelope:
 
 1. **Mode executed**: which one (bootstrap / open / set-state / close / skip-tester / skip-archivist).
 2. **Files touched**: list of relative paths.
 3. **Insights/wiki/glossary created or updated** (if close mode): file names.
 4. **Result**: ✓ ok / ⚠ partial with reason / ✗ error with reason.
 
+The `Modo / Archivos / Insights / Resultado` block is the **body** of the envelope. ESTADO mapping: operación completada → `ESTADO: COMPLETO`; cualquier `state: blocked` (vault no existe, verify-after-write falla, hard stop) → `ESTADO: BLOQUEADO` con `FALTA:` describiendo qué necesitás y el `state: blocked` original en el body; ⚠ partial → `PARCIAL`; ✗ error → `ERROR`.
+
+El cierre **`### FIN-PHOBOS-REPORT` es la ÚNICA señal determinística** de que el informe llegó entero. Si falta, Phobos asume que te cortaron y re-delega. **NUNCA la omitas** — es la última línea, siempre.
+
 Example (close task):
 ```
+### PHOBOS-REPORT v1
+AGENTE: archivist
+ESTADO: COMPLETO
+
 Modo: close task
 Archivos:
   - vault/memory/tasks/tr-01-login/conclusion.md (creado)
@@ -680,6 +688,7 @@ Re-index:
   - Memory (RAG): ✓ ok (12 archivos re-vectorizados)
   - CodeGraph: ✓ ok (8 archivos nuevos en el grafo)
 Resultado: ✓ ok
+### FIN-PHOBOS-REPORT
 ```
 
 If a re-index was skipped, indicate why:
@@ -709,11 +718,12 @@ No verbosity. Phobos reads your output and continues with closing + reporting to
 
 ## Output contract to Phobos (HARD RULE — do not violate)
 
-The "Report to Phobos" block above is already concise — that is the **only** acceptable shape for your final message. Reinforcing the limits:
+The "Report to Phobos" block above is already concise — that PHOBOS-REPORT envelope (header `### PHOBOS-REPORT v1` + `AGENTE`/`ESTADO`, the `Modo / Archivos / Insights / Resultado` body, and the closing `### FIN-PHOBOS-REPORT`) is the **only** acceptable shape for your final message. Reinforcing the limits:
 
 **Hard limits**:
-- **≤ 500 caracteres TOTAL** en tu mensaje final.
-- Solo las 4 secciones: `Modo`, `Archivos`, `Insights` (si aplica), `Resultado`.
+- **≤ 500 caracteres TOTAL** en tu mensaje final (el envelope header/footer no cuenta contra el cuerpo, pero mantené el body compacto).
+- Envuelto SIEMPRE en `### PHOBOS-REPORT v1` … `### FIN-PHOBOS-REPORT`. El sentinel de cierre nunca se omite.
+- Solo las 4 secciones en el body: `Modo`, `Archivos`, `Insights` (si aplica), `Resultado`.
 - **0 transcripción** del contenido de `conclusion.md`, `insights/*.md`, `wiki/*.md`, `glossary/*.md`.
 - **0 listas de "qué destilé"**. Phobos lee los archivos si los necesita.
 - **0 explicación** de tu razonamiento de destilación ("Decidí que esto era un insight porque..."). Va en el archivo destilado, no en chat.

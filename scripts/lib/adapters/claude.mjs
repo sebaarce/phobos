@@ -49,8 +49,73 @@ const CLAUDE_AGENT_CONFIG = {
   tester: {
     model: 'haiku',    // tests cortos, salida concisa
   },
+  reviewer: {
+    model: 'sonnet',   // auditoría — necesita razonamiento para detectar bugs/seguridad
+  },
   archivist: {
     model: 'sonnet',   // prosa para distilar insights / conclusions
+  },
+};
+
+// MCP tools por agente (Claude Code). En OpenCode los MCP declarados en
+// opencode.json están disponibles por default; en Claude, en cambio, cada
+// subagente SOLO ve las tools listadas en su `tools:`. Por eso inyectamos
+// explícitamente `mcp__<server>` en la línea de tools de los agentes que lo
+// necesitan. context7 = documentación de librerías (read-only): lo aprovechan
+// el researcher (chequear APIs durante el relevamiento) y el programmer
+// (consultar el uso correcto de una lib al implementar).
+const CLAUDE_AGENT_MCP = {
+  researcher: ['context7'],
+  programmer: ['context7'],
+};
+
+// Confinamiento per-agente de Edit/Write (y Bash) para Claude Code, vía el hook
+// paths-allow.cjs inyectado en el frontmatter `hooks:` de cada agente.
+//
+// Por qué existe: en OpenCode el `permission.edit` del frontmatter confina por
+// glob de path de forma nativa. En Claude, en cambio, las tools son a nivel de
+// herramienta (Edit/Write), NO de path — un agente con Edit puede escribir
+// cualquier archivo. Este map replica el scope del `permission.edit` de cada
+// agente como flags de paths-allow.cjs (deny gana; si hay allow, el path debe
+// matchear alguno). Espejo directo de los globs del template OpenCode.
+//
+//   allow          → Edit/Write solo a estos globs (whitelist).
+//   deny           → nunca a estos (aunque no haya allow); deny gana.
+//   bashDenyWrites → además, bloquea escrituras vía Bash a estos globs.
+//
+// phobos no aparece: su permission.edit es deny total (no escribe nada), así
+// que el transform ya le pone Edit/Write en disallowedTools — no necesita hook.
+const CLAUDE_AGENT_HOOKS = {
+  researcher: {
+    allow: ['**/vault/memory/tasks/*/research.md', '**/vault/memory/research-queries/*.md'],
+  },
+  'planner-hard': {
+    allow: ['**/vault/memory/tasks/*/requirements.md'],
+  },
+  'gherkin-author': {
+    allow: ['**/vault/memory/tasks/*/plan.md'],
+  },
+  reviewer: {
+    allow: ['**/vault/memory/tasks/*/review.md', '**/vault/memory/review-queries/*.md'],
+  },
+  tester: {
+    allow: [
+      '**/spec/**', '**/test/**', '**/tests/**', '**/__tests__/**',
+      '**/*.test.*', '**/*.spec.*', '**/cypress/**', '**/e2e/**',
+      '**/vault/memory/tasks/*/test-report.md',
+    ],
+    deny: ['**/.opencode/**', '**/.claude/**', '**/CLAUDE.md', '**/AGENTS.md'],
+    bashDenyWrites: ['**/.opencode/**', '**/.claude/**', '**/CLAUDE.md', '**/AGENTS.md'],
+  },
+  programmer: {
+    // Escribe código de producción en cualquier lado; solo vedamos la config de agentes.
+    deny: ['**/.opencode/**', '**/.claude/**', '**/CLAUDE.md', '**/AGENTS.md'],
+    bashDenyWrites: ['**/.opencode/**', '**/.claude/**', '**/CLAUDE.md', '**/AGENTS.md'],
+  },
+  archivist: {
+    // Guardián del vault: escribe muchos archivos, todos bajo vault/.
+    allow: ['**/vault/**'],
+    deny: ['**/.opencode/**', '**/.claude/**', '**/CLAUDE.md', '**/AGENTS.md'],
   },
 };
 
@@ -104,7 +169,7 @@ export class ClaudeAdapter extends IDEAdapter {
     // Agentes: tomamos los templates de OpenCode (single source of truth)
     // y los escribimos a .claude/agents/<agent>.md aplicando el transformer
     // de frontmatter. El body queda idéntico.
-    for (const agent of ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist']) {
+    for (const agent of ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'reviewer', 'archivist']) {
       files.push({
         src: `agentes/${agent}.md`,
         dst: `.claude/agents/${agent}.md`,
@@ -129,6 +194,38 @@ export class ClaudeAdapter extends IDEAdapter {
     files.push({
       src: 'claude/settings.json',
       dst: '.claude/settings.json',
+      group: 'comandos',
+    });
+
+    // MCP servers para Claude Code (.mcp.json en la raíz del proyecto).
+    // context7 = documentación de librerías (anónimo, read-only). Se habilita
+    // desde settings.json (enabledMcpjsonServers) y el researcher/programmer lo
+    // reciben en su `tools:` vía el transform (CLAUDE_AGENT_MCP).
+    files.push({
+      src: 'mcp/mcp.json',
+      dst: '.mcp.json',
+      group: 'comandos',
+    });
+
+    // Hooks de enforcement (Claude Code) — capa portada de agent-cargo.
+    //   paths-allow.cjs → confinamiento per-agente de Edit/Write y Bash (lo
+    //                     invoca cada agente desde su frontmatter `hooks:`).
+    //   guard.cjs       → política global de comandos (destructivos, secretos,
+    //                     push a ramas protegidas) leyendo policies.json.
+    //   audit.cjs       → sink JSONL + detección de cortes (sentinel FIN-PHOBOS-REPORT).
+    //   lib.cjs         → helpers compartidos (normalización de comandos, glob, audit).
+    // En OpenCode esta capa NO hace falta: el permission system del frontmatter
+    // ya confina paths y comandos de forma nativa.
+    for (const hook of ['lib', 'paths-allow', 'guard', 'audit']) {
+      files.push({
+        src: `hooks/${hook}.cjs`,
+        dst: `.claude/hooks/${hook}.cjs`,
+        group: 'comandos',
+      });
+    }
+    files.push({
+      src: 'policies/policies.json',
+      dst: '.claude/policies.json',
       group: 'comandos',
     });
 
@@ -170,6 +267,7 @@ export class ClaudeAdapter extends IDEAdapter {
       { src: 'agentes/gherkin-author.md',  dst: '.claude/agents/gherkin-author.md',  ignoreModel: true,  transform: 'agent' },
       { src: 'agentes/programmer.md',      dst: '.claude/agents/programmer.md',      ignoreModel: true,  transform: 'agent' },
       { src: 'agentes/tester.md',          dst: '.claude/agents/tester.md',          ignoreModel: true,  transform: 'agent' },
+      { src: 'agentes/reviewer.md',        dst: '.claude/agents/reviewer.md',        ignoreModel: true,  transform: 'agent' },
       { src: 'agentes/archivist.md',       dst: '.claude/agents/archivist.md',       ignoreModel: true,  transform: 'agent' },
       // Commands — templates propios.
       { src: 'claude/commands/adapt-agents.md',      dst: '.claude/commands/adapt-agents.md',      ignoreModel: false },
@@ -182,6 +280,14 @@ export class ClaudeAdapter extends IDEAdapter {
       // con cambios locales. El wizard de updates va a marcarla como diff
       // si el usuario tiene una versión más vieja del template.
       { src: 'claude/settings.json',                 dst: '.claude/settings.json',                 ignoreModel: false },
+      // MCP servers (context7). Trackeado para detectar updates del template.
+      { src: 'mcp/mcp.json',                         dst: '.mcp.json',                             ignoreModel: false },
+      // Hooks de enforcement + política de comandos (Claude Code only).
+      { src: 'hooks/lib.cjs',                        dst: '.claude/hooks/lib.cjs',                 ignoreModel: false },
+      { src: 'hooks/paths-allow.cjs',                dst: '.claude/hooks/paths-allow.cjs',         ignoreModel: false },
+      { src: 'hooks/guard.cjs',                      dst: '.claude/hooks/guard.cjs',               ignoreModel: false },
+      { src: 'hooks/audit.cjs',                      dst: '.claude/hooks/audit.cjs',               ignoreModel: false },
+      { src: 'policies/policies.json',               dst: '.claude/policies.json',                 ignoreModel: false },
       // SECURITY.md — política compartida; trackeada para detectar updates.
       { src: 'agentes/SECURITY.md',                  dst: 'vault/SECURITY.md',                     ignoreModel: false },
     ];
@@ -325,8 +431,52 @@ export class ClaudeAdapter extends IDEAdapter {
       claudeFm.push(`disallowedTools: ${disallowed}`);
     }
 
-    return `---\n${claudeFm.join('\n')}\n---\n\n${body}`;
+    // Bloque `hooks:` per-agente (paths-allow.cjs) — confina Edit/Write/Bash por
+    // path en Claude Code, replicando el permission.edit del template OpenCode.
+    const hooksBlock = buildAgentHooksBlock(agentName);
+    const claudeFrontmatter = claudeFm.join('\n') + (hooksBlock ? `\n${hooksBlock}` : '');
+
+    return `---\n${claudeFrontmatter}\n---\n\n${body}`;
   }
+}
+
+// Genera el bloque YAML `hooks:` para el frontmatter Claude de un agente, a
+// partir de CLAUDE_AGENT_HOOKS. Devuelve '' si el agente no tiene confinamiento
+// declarado (ej: phobos, que no escribe). El command se escribe como escalar
+// YAML plano (empieza con `node `, así que las comillas internas son válidas),
+// igual que los agentes de agent-cargo.
+function buildAgentHooksBlock(agentName) {
+  const cfg = CLAUDE_AGENT_HOOKS[agentName];
+  if (!cfg) return '';
+
+  const HOOK = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/paths-allow.cjs"';
+  const lines = ['hooks:', '  PreToolUse:'];
+
+  // Confinamiento de Edit/Write/MultiEdit por path.
+  const writeFlags = [];
+  for (const g of (cfg.allow || [])) writeFlags.push(`--allow "${g}"`);
+  for (const g of (cfg.deny || [])) writeFlags.push(`--deny "${g}"`);
+  if (writeFlags.length) {
+    lines.push(
+      '    - matcher: "Edit|Write|MultiEdit"',
+      '      hooks:',
+      '        - type: command',
+      `          command: ${HOOK} ${writeFlags.join(' ')}`,
+    );
+  }
+
+  // Confinamiento de escrituras vía Bash (opcional).
+  if (cfg.bashDenyWrites && cfg.bashDenyWrites.length) {
+    const bashFlags = cfg.bashDenyWrites.map((g) => `--bash-deny-writes "${g}"`);
+    lines.push(
+      '    - matcher: "Bash"',
+      '      hooks:',
+      '        - type: command',
+      `          command: ${HOOK} ${bashFlags.join(' ')}`,
+    );
+  }
+
+  return lines.join('\n');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -520,6 +670,12 @@ function mapOpencodeToolsToClaude(openCodeTools, openCodePermission, agentName) 
     } else {
       claudeTools.add('Agent');
     }
+  }
+
+  // MCP tools por agente — en Claude cada subagente solo ve lo que lista en
+  // `tools:`, así que agregamos `mcp__<server>` para los que lo necesitan.
+  for (const server of (CLAUDE_AGENT_MCP[agentName] || [])) {
+    claudeTools.add(`mcp__${server}`);
   }
 
   return [...claudeTools].join(', ');

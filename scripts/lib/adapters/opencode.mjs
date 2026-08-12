@@ -60,7 +60,7 @@ export class OpencodeAdapter extends IDEAdapter {
     const files = [];
 
     // Agentes
-    for (const agent of ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'archivist']) {
+    for (const agent of ['phobos', 'researcher', 'planner-hard', 'gherkin-author', 'programmer', 'tester', 'reviewer', 'archivist']) {
       files.push({
         src: `agentes/${agent}.md`,
         dst: `.opencode/agent/${agent}.md`,
@@ -76,6 +76,15 @@ export class OpencodeAdapter extends IDEAdapter {
         group: 'comandos',
       });
     }
+
+    // Config de OpenCode (opencode.json en la raíz) — declara el MCP context7
+    // (documentación de librerías, anónimo/read-only). En OpenCode los MCP
+    // remotos declarados acá quedan disponibles para los agentes por default.
+    files.push({
+      src: 'opencode/opencode.json',
+      dst: 'opencode.json',
+      group: 'comandos',
+    });
 
     // Vault — IDE-agnostic, pero el adapter lo lista por completitud del bootstrap.
     const vaultFiles = [
@@ -116,6 +125,7 @@ export class OpencodeAdapter extends IDEAdapter {
       { src: 'agentes/gherkin-author.md',  dst: '.opencode/agent/gherkin-author.md',  ignoreModel: true },
       { src: 'agentes/programmer.md',      dst: '.opencode/agent/programmer.md',      ignoreModel: true },
       { src: 'agentes/tester.md',          dst: '.opencode/agent/tester.md',          ignoreModel: true },
+      { src: 'agentes/reviewer.md',        dst: '.opencode/agent/reviewer.md',        ignoreModel: true },
       { src: 'agentes/archivist.md',       dst: '.opencode/agent/archivist.md',       ignoreModel: true },
       // Slash commands — no tienen `model:`, compare exact.
       { src: 'opencode/command/adapt-agents.md',      dst: '.opencode/command/adapt-agents.md',      ignoreModel: false },
@@ -123,6 +133,8 @@ export class OpencodeAdapter extends IDEAdapter {
       { src: 'opencode/command/reindex-memory.md',    dst: '.opencode/command/reindex-memory.md',    ignoreModel: false },
       { src: 'opencode/command/reindex-codegraph.md', dst: '.opencode/command/reindex-codegraph.md', ignoreModel: false },
       { src: 'opencode/command/list-memory.md',       dst: '.opencode/command/list-memory.md',       ignoreModel: false },
+      // Config de OpenCode (MCP context7). Trackeada para detectar updates del template.
+      { src: 'opencode/opencode.json',                dst: 'opencode.json',                          ignoreModel: false },
       // SECURITY.md — política compartida; trackeada para que "Actualizar agentes"
       // detecte updates al template y los aplique al proyecto.
       { src: 'agentes/SECURITY.md',                   dst: 'vault/SECURITY.md',                      ignoreModel: false },
