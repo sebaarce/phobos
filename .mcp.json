@@ -1,0 +1,9 @@
+{
+  "$comment": "Phobos — MCP servers para Claude Code. context7 provee documentación actualizada de librerías (anónimo, read-only, sin auth). El researcher y el programmer lo usan vía la tool mcp__context7. Se habilita en .claude/settings.json (campo enabledMcpjsonServers). Para una API key personal (mayor rate limit), NO la pongas acá: usá `claude mcp add context7 --scope local --transport http https://mcp.context7.com/mcp --header \"CONTEXT7_API_KEY: <tu-key>\"` — la key queda en ~/.claude.json (por dev), nunca en el repo.",
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    }
+  }
+}
