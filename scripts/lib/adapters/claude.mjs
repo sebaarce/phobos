@@ -36,6 +36,7 @@ import { tuiYesNo } from '../tui.mjs';
 const STATUSLINE_DST = '.claude/statusline.sh';
 // CLAUDE_PROJECT_DIR si existe; si no, cae a la ruta relativa. isPhobosStatusline
 // detecta tanto este comando como el viejo `bash .claude/statusline.sh`.
+const STATUSLINE_DEFERRED_MSG = '  Statusline no instalado. Podés instalarlo luego desde el menú principal.';
 const STATUSLINE_COMMAND = 'bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"';
 const SETTINGS_PATH = '.claude/settings.json';
 
@@ -323,7 +324,9 @@ export class ClaudeAdapter extends IDEAdapter {
 
   // Invocado por ensureBootstrap después de copiar los archivos. Flags:
   // --statusline (fuerza instalar) / --no-statusline (ofrece desinstalar).
-  async configureStatusline() {
+  // `from`: 'menu' (pedido explícito: no re-pregunta "¿instalar?"),
+  // 'update' (oferta en re-instalación: no hace nada si ya está instalado).
+  async configureStatusline({ from } = {}) {
     const forceInstall = argv.includes('--statusline');
     const forceUninstall = argv.includes('--no-statusline');
     const interactive = Boolean(stdin.isTTY);
@@ -331,6 +334,7 @@ export class ClaudeAdapter extends IDEAdapter {
     if (!settings) return;
     const existing = settings.statusLine;
     const ownedByPhobos = isPhobosStatusline(existing);
+    if (from === 'update' && ownedByPhobos && !forceInstall && !forceUninstall) return;
 
     if (forceUninstall || (ownedByPhobos && !forceInstall)) {
       if (existing && !ownedByPhobos) {
@@ -338,7 +342,10 @@ export class ClaudeAdapter extends IDEAdapter {
         return;
       }
       const hasScript = await fileExists(join(cwd(), STATUSLINE_DST));
-      if (!ownedByPhobos && !hasScript) return; // nada instalado: no-op
+      if (!ownedByPhobos && !hasScript) { // nada instalado: no-op
+        console.log(STATUSLINE_DEFERRED_MSG);
+        return;
+      }
       const remove = interactive
         ? await tuiYesNo('\n¿Quitar el statusline de Phobos de este proyecto?', false)
         : env.PHOBOS_STATUSLINE_UNINSTALL === '1';
@@ -349,9 +356,16 @@ export class ClaudeAdapter extends IDEAdapter {
     }
 
     if (!forceInstall) {
-      if (!interactive) return; // opt-in: sin TTY ni flag no se instala nada
-      const install = await tuiYesNo('\n¿Instalar el statusline de Phobos en este proyecto?', true);
-      if (!install) return;
+      if (!interactive) { // opt-in: sin TTY ni flag no se instala nada
+        console.log(STATUSLINE_DEFERRED_MSG);
+        return;
+      }
+      const install = from === 'menu'
+        || await tuiYesNo('\n¿Instalar el statusline de Phobos en este proyecto?', true);
+      if (!install) {
+        console.log(STATUSLINE_DEFERRED_MSG);
+        return;
+      }
     }
     if (existing && !ownedByPhobos && !forceInstall) {
       const replace = interactive && await tuiYesNo('\nstatusLine ya configurada. ¿Reemplazar?', false);
@@ -361,6 +375,13 @@ export class ClaudeAdapter extends IDEAdapter {
       }
     }
     await this.#installStatusline(settings);
+  }
+
+  // 'phobos' | 'foreign' | 'absent' — usado por el menú para rotular la opción.
+  async getStatuslineStatus() {
+    const settings = await this.#readSettings().catch(() => null);
+    if (isPhobosStatusline(settings?.statusLine)) return 'phobos';
+    return settings?.statusLine ? 'foreign' : 'absent';
   }
 
   async #readSettings() {

@@ -168,8 +168,13 @@ async function getMainMenuState(agentDir, adapter) {
     || await fileExists('package.json')
     || await fileExists('AGENTS.md');
 
+  // Statusline: solo existe si el adapter Claude está instalado en el proyecto.
+  const claudeAdapter = all.find(a => a.id === 'claude');
+  const statuslineStatus = claudeAdapter ? await claudeAdapter.getStatuslineStatus() : null;
+
   return {
     installedIDEs,
+    statuslineStatus,
     activeIDE: adapter.displayName,
     vaultPresent,
     pendingUpdates,
@@ -230,23 +235,33 @@ async function runMainMenu(agentDir, adapter) {
 
     // En el menú principal Esc no tiene sentido (no hay "menú padre"),
     // pero si el usuario lo apreta, lo tratamos como "no acción" — solo re-rendereamos.
+    // Statusline: solo si Claude está instalado. Va antes de "Abrir TUI", así
+    // los índices de TUI/Salir se desplazan solo cuando la opción existe.
+    const statuslineLabels = {
+      absent: 'Instalar statusline      ' + dim('(Claude Code · barra de estado del proyecto)'),
+      phobos: 'Desinstalar statusline   ' + dim('(Claude Code · instalado por Phobos)'),
+      foreign: 'Instalar statusline      ' + dim('(Claude Code · hay una statusLine propia, pide confirmación)'),
+    };
+    const statuslineLabel = statuslineLabels[state.statuslineStatus];
+    const menuOptions = [
+      installLabel,
+      updateLabel,
+      'Ver configuración de modelos',
+      'Setear modelos de agentes',
+      'Instalar herramientas',
+      memoryLabel,
+      codeGraphLabel,
+      ...(statuslineLabel ? [statuslineLabel] : []),
+      tuiLabel,
+      dim('Salir'),
+    ];
+    const STATUSLINE_INDEX = statuslineLabel ? 7 : -1;
+    const TUI_INDEX = menuOptions.length - 2;
+    const EXIT_INDEX = menuOptions.length - 1;
+
     let choice;
     try {
-      choice = await tuiSelect(
-        '\n¿Qué querés hacer?',
-        [
-          installLabel,
-          updateLabel,
-          'Ver configuración de modelos',
-          'Setear modelos de agentes',
-          'Instalar herramientas',
-          memoryLabel,
-          codeGraphLabel,
-          tuiLabel,
-          dim('Salir'),
-        ],
-        0,
-      );
+      choice = await tuiSelect('\n¿Qué querés hacer?', menuOptions, 0);
     } catch (err) {
       if (err === WIZARD_CANCELLED) continue; // re-renderizar menú
       throw err;
@@ -273,7 +288,10 @@ async function runMainMenu(agentDir, adapter) {
       await runAction(() => actionMemory(adapter));
     } else if (index === 6) {
       await runAction(() => actionCodeGraph(adapter));
-    } else if (index === 7) {
+    } else if (index === STATUSLINE_INDEX) {
+      const claude = (await detectAllInstalledAdapters()).find(a => a.id === 'claude');
+      await runAction(() => claude.configureStatusline({ from: 'menu' }));
+    } else if (index === TUI_INDEX) {
       // Abrir TUI — al volver del child (TUI cerrada) salimos del wizard:
       // el usuario ya consumió la sesión, no tiene sentido reaparecer el menú.
       const launched = await actionOpenTUI(adapter);
@@ -283,7 +301,7 @@ async function runMainMenu(agentDir, adapter) {
         return;
       }
       // launched=false → el usuario canceló el sub-prompt de "qué TUI" — volvemos al menú.
-    } else if (index === 8) {
+    } else if (index === EXIT_INDEX) {
       clearScreen();
       showHappyGoodbye();
       finalizeAndExit(0);
@@ -359,6 +377,8 @@ async function actionInstallPhobos(currentAdapter) {
     console.log(dim('  "Actualizar agentes" en el menú principal. Esa acción detecta diffs entre'));
     console.log(dim('  los templates del repo y los archivos locales, y aplica updates selectivos.'));
     console.log('');
+    // Solo Claude define configureStatusline: ofrece el statusline si falta.
+    await target.configureStatusline?.({ from: 'update' });
     return;
   }
 
