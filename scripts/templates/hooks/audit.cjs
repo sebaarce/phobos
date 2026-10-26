@@ -15,6 +15,8 @@
  * pure observability — it must NEVER block the session. Any internal error is
  * reported on stderr and the process still exits 0 (fail-open).
  */
+const fs = require('fs');
+const path = require('path');
 const lib = require('./lib.cjs');
 
 /** Closing sentinel of the PHOBOS-REPORT envelope (SPEC §5.3). */
@@ -34,6 +36,41 @@ function classifyReport(lastMessage) {
     report_cortado: !lastMessage.includes(REPORT_SENTINEL),
     report_estado: estado ? estado[1] : null,
   };
+}
+
+/**
+ * Sum token usage and pick the last model from a subagent transcript (JSONL).
+ * Accepts `usage` at the top level or under `message` (real Claude Code
+ * transcripts nest it). Returns nulls on any read/parse problem.
+ */
+function readTranscriptUsage(transcriptPath) {
+  const empty = { tokens: null, model: null };
+  if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) return empty;
+  try {
+    const tokens = { input: 0, output: 0, cache_read: 0, cache_creation: 0 };
+    let model = null;
+    let seen = false;
+    for (const line of fs.readFileSync(transcriptPath, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const usage = record.usage || (record.message && record.message.usage);
+      if (!usage || typeof usage !== 'object') continue;
+      seen = true;
+      tokens.input += usage.input_tokens || 0;
+      tokens.output += usage.output_tokens || 0;
+      tokens.cache_read += usage.cache_read_input_tokens || 0;
+      tokens.cache_creation += usage.cache_creation_input_tokens || 0;
+      model = usage.model || (record.message && record.message.model) || model;
+    }
+    return seen ? { tokens, model } : empty;
+  } catch {
+    return empty;
+  }
 }
 
 async function main() {
@@ -60,6 +97,13 @@ async function main() {
       ? classifyReport(payload.last_assistant_message)
       : { report_cortado: null, report_estado: null };
 
+  // Guard: only parse the transcript when the user opted in to the statusline.
+  const statuslineInstalled = fs.existsSync(path.join(projectDir, '.claude', 'statusline.sh'));
+  const usage =
+    event === 'SubagentStop' && statuslineInstalled
+      ? readTranscriptUsage(payload.agent_transcript_path)
+      : { tokens: null, model: null };
+
   lib.auditWrite(projectDir, {
     ts: new Date().toISOString(),
     session_id: payload.session_id || null,
@@ -73,6 +117,8 @@ async function main() {
     report_cortado: report.report_cortado,
     report_estado: report.report_estado,
     cwd: payload.cwd || null,
+    model: usage.model,
+    tokens: usage.tokens,
   });
 }
 

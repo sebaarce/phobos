@@ -39,8 +39,26 @@ const STATUSLINE_DST = '.claude/statusline.sh';
 const STATUSLINE_DEFERRED_MSG = '  Statusline no instalado. Podés instalarlo luego desde el menú principal.';
 const STATUSLINE_COMMAND = 'bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"';
 const SETTINGS_PATH = '.claude/settings.json';
+// Feature "subagentes en statusline": tabla de precios editable (junto al script) y
+// el hook SubagentStart que registra el inicio de cada subagente en el audit JSONL.
+// Ambos los agrega/quita el statusline; audit.cjs y su hook SubagentStop son core.
+const PRICES_DST = '.claude/claude.prices.json';
+const SUBAGENT_START_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/audit.cjs" --event SubagentStart';
+const isSubagentStartEntry = (entry) =>
+  Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === SUBAGENT_START_COMMAND);
 
-const isPhobosStatusline = (statusLine) =>
+// Muta `settings` agregando el hook si falta. Devuelve true si lo agregó.
+function addSubagentStartHook(settings) {
+  const startHooks = settings.hooks?.SubagentStart ?? [];
+  if (startHooks.some(isSubagentStartEntry)) return false;
+  settings.hooks = {
+    ...settings.hooks,
+    SubagentStart: [...startHooks, { hooks: [{ type: 'command', command: SUBAGENT_START_COMMAND }] }],
+  };
+  return true;
+}
+
+const isPhobosStatusline =(statusLine) =>
   typeof statusLine?.command === 'string' && statusLine.command.includes(STATUSLINE_DST);
 
 // Configuración por agente (Claude-specific). Centralizada para que sea fácil
@@ -282,7 +300,11 @@ export class ClaudeAdapter extends IDEAdapter {
     // Statusline opt-in: solo se trackea si ya está instalado, así el update
     // lo refresca sin reinstalarlo (como "missing") a quien no lo quiso.
     const statusline = existsSync(join(cwd(), STATUSLINE_DST))
-      ? [{ src: 'claude/statusline.sh', dst: STATUSLINE_DST, ignoreModel: false }]
+      ? [
+          { src: 'claude/statusline.sh', dst: STATUSLINE_DST, ignoreModel: false },
+          // keepLocal: el usuario edita los precios; el update deja la versión nueva en `.new`.
+          { src: 'claude/claude.prices.json', dst: PRICES_DST, ignoreModel: false, keepLocal: true },
+        ]
       : [];
     return [
       ...statusline,
@@ -384,6 +406,16 @@ export class ClaudeAdapter extends IDEAdapter {
     return settings?.statusLine ? 'foreign' : 'absent';
   }
 
+  // Update: instalaciones previas de la statusline no tienen el hook SubagentStart.
+  // Solo se registra si la statusLine es de Phobos; idempotente.
+  async ensureSubagentStartHook() {
+    const settings = await this.#readSettings().catch(() => null);
+    if (!settings || !isPhobosStatusline(settings.statusLine)) return;
+    if (!addSubagentStartHook(settings)) return;
+    await safeWriteFile(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
+    console.log('  ✓ Hook SubagentStart registrado para la statusline.');
+  }
+
   async #readSettings() {
     try {
       return JSON.parse(await readFile(join(cwd(), SETTINGS_PATH), 'utf-8'));
@@ -397,7 +429,12 @@ export class ClaudeAdapter extends IDEAdapter {
     const script = await readFile(join(TEMPLATES_DIR, 'claude/statusline.sh'), 'utf-8');
     await safeWriteFile(STATUSLINE_DST, script);
     try { await chmod(join(cwd(), STATUSLINE_DST), 0o755); } catch { /* sin bit de exec en Windows */ }
+    // Precios: no pisar los que el usuario ya haya editado.
+    if (!await fileExists(join(cwd(), PRICES_DST))) {
+      await safeWriteFile(PRICES_DST, await readFile(join(TEMPLATES_DIR, 'claude/claude.prices.json'), 'utf-8'));
+    }
     settings.statusLine = { type: 'command', command: STATUSLINE_COMMAND };
+    addSubagentStartHook(settings);
     await safeWriteFile(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
     console.log('  ✓ Statusline instalado.');
     if (spawnSync('jq', ['--version'], { stdio: 'ignore' }).status !== 0) {
@@ -407,8 +444,16 @@ export class ClaudeAdapter extends IDEAdapter {
 
   async #uninstallStatusline(settings) {
     await rm(join(cwd(), STATUSLINE_DST), { force: true });
+    await rm(join(cwd(), PRICES_DST), { force: true });
+    await rm(join(cwd(), `${PRICES_DST}.new`), { force: true });
     if (isPhobosStatusline(settings.statusLine)) {
       delete settings.statusLine;
+      // Solo se quita el hook SubagentStart de esta feature; audit.cjs y SubagentStop quedan.
+      if (settings.hooks?.SubagentStart) {
+        const kept = settings.hooks.SubagentStart.filter((entry) => !isSubagentStartEntry(entry));
+        if (kept.length > 0) settings.hooks.SubagentStart = kept;
+        else delete settings.hooks.SubagentStart;
+      }
       await safeWriteFile(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
     }
     console.log('  ✓ Statusline de Phobos quitado de este proyecto.');

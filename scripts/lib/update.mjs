@@ -184,6 +184,12 @@ export async function applyUpdate(file, { preserveLocalModel = true, adapter = n
   }
   // Si preserveLocalModel=false, dejamos el modelo del template intacto.
 
+  // keepLocal: archivo editable por el usuario; la versión nueva queda como `.new`.
+  if (file.keepLocal) {
+    await safeWriteFile(`${file.localPath}.new`, content);
+    console.log(`  ${basename(file.dst)}: se conservó tu versión; la nueva quedó en ${file.dst}.new`);
+    return;
+  }
   await safeWriteFile(file.localPath, content);
 }
 
@@ -497,6 +503,7 @@ export async function proactiveUpdateCheck(adapter) {
 }
 
 export async function ensureUpdated(adapter) {
+  await adapter?.ensureSubagentStartHook?.();
   const updates = await scanForUpdates(adapter);
   const nothingToDo = updates.outdated.length === 0 && updates.missing.length === 0;
 
@@ -583,6 +590,8 @@ export async function actionUpdateAgents(adapter, { force = false } = {}) {
       value: legacy.migrated.map(m => m.legacyName + '.md → ' + m.replacements.join(' + ')).join('; '),
     });
   }
+
+  await adapter.ensureSubagentStartHook?.();
 
   // ─── Step 1/4: Detectar archivos diferentes y faltantes ────────────
   renderWizardStep(printUpdateBanner, history, (force
