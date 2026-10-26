@@ -223,6 +223,7 @@ npm ls -g --depth=0 | grep phobos
 - **Node.js ≥ 18**
 - **OpenCode CLI** instalado y con al menos un proveedor conectado (correr `/connect` dentro de OpenCode)
 - (opcional) **Obsidian** para navegar el vault de memoria como grafo de wikilinks
+- (opcional) **jq** — requerido por el statusline de Claude Code. El statusline es opt-in (solo Claude, no soportado en OpenCode): el setup lo ofrece por proyecto, o se fuerza/quita con `--statusline` / `--no-statusline`. En modo no interactivo, quitarlo requiere `PHOBOS_STATUSLINE_UNINSTALL=1`.
 
 ---
 

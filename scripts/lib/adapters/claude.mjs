@@ -20,11 +20,27 @@
 // Configuración por agente para Claude Code (modelos recomendados, etc.):
 // Ver CLAUDE_AGENT_CONFIG abajo.
 
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, rm, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { argv, env, stdin, cwd } from 'node:process';
 import { IDEAdapter } from './base.mjs';
-import { tryExec, fileExists } from '../fs-utils.mjs';
+import { tryExec, fileExists, safeWriteFile } from '../fs-utils.mjs';
+import { TEMPLATES_DIR } from '../runtime.mjs';
+import { tuiYesNo } from '../tui.mjs';
+
+// Statusline (opt-in, solo proyecto). La statusLine de Phobos se identifica
+// porque su `command` apunta a este script; cualquier otra es ajena.
+const STATUSLINE_DST = '.claude/statusline.sh';
+// CLAUDE_PROJECT_DIR si existe; si no, cae a la ruta relativa. isPhobosStatusline
+// detecta tanto este comando como el viejo `bash .claude/statusline.sh`.
+const STATUSLINE_COMMAND = 'bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"';
+const SETTINGS_PATH = '.claude/settings.json';
+
+const isPhobosStatusline = (statusLine) =>
+  typeof statusLine?.command === 'string' && statusLine.command.includes(STATUSLINE_DST);
 
 // Configuración por agente (Claude-specific). Centralizada para que sea fácil
 // de ajustar sin tocar el transformer.
@@ -262,7 +278,13 @@ export class ClaudeAdapter extends IDEAdapter {
   // ─── Archivos trackeados (Actualizar agentes) ──────────────────────
 
   trackedFiles() {
+    // Statusline opt-in: solo se trackea si ya está instalado, así el update
+    // lo refresca sin reinstalarlo (como "missing") a quien no lo quiso.
+    const statusline = existsSync(join(cwd(), STATUSLINE_DST))
+      ? [{ src: 'claude/statusline.sh', dst: STATUSLINE_DST, ignoreModel: false }]
+      : [];
     return [
+      ...statusline,
       // Agentes — mismo single source. ignoreModel: true porque el usuario
       // customiza el modelo deliberadamente vía "Setear modelos".
       { src: 'agentes/phobos.md',          dst: '.claude/agents/phobos.md',          ignoreModel: true,  transform: 'agent' },
@@ -295,6 +317,80 @@ export class ClaudeAdapter extends IDEAdapter {
       // SECURITY.md — política compartida; trackeada para detectar updates.
       { src: 'agentes/SECURITY.md',                  dst: 'vault/SECURITY.md',                     ignoreModel: false },
     ];
+  }
+
+  // ─── Statusline (opt-in) ───────────────────────────────────────────
+
+  // Invocado por ensureBootstrap después de copiar los archivos. Flags:
+  // --statusline (fuerza instalar) / --no-statusline (ofrece desinstalar).
+  async configureStatusline() {
+    const forceInstall = argv.includes('--statusline');
+    const forceUninstall = argv.includes('--no-statusline');
+    const interactive = Boolean(stdin.isTTY);
+    const settings = await this.#readSettings();
+    if (!settings) return;
+    const existing = settings.statusLine;
+    const ownedByPhobos = isPhobosStatusline(existing);
+
+    if (forceUninstall || (ownedByPhobos && !forceInstall)) {
+      if (existing && !ownedByPhobos) {
+        console.log('  statusLine ajena detectada: no se toca.');
+        return;
+      }
+      const hasScript = await fileExists(join(cwd(), STATUSLINE_DST));
+      if (!ownedByPhobos && !hasScript) return; // nada instalado: no-op
+      const remove = interactive
+        ? await tuiYesNo('\n¿Quitar el statusline de Phobos de este proyecto?', false)
+        : env.PHOBOS_STATUSLINE_UNINSTALL === '1';
+      if (remove) await this.#uninstallStatusline(settings);
+      else if (ownedByPhobos && !forceUninstall) await this.#installStatusline(settings); // re-setup idempotente
+      else console.log('  Statusline conservado.');
+      return;
+    }
+
+    if (!forceInstall) {
+      if (!interactive) return; // opt-in: sin TTY ni flag no se instala nada
+      const install = await tuiYesNo('\n¿Instalar el statusline de Phobos en este proyecto?', true);
+      if (!install) return;
+    }
+    if (existing && !ownedByPhobos && !forceInstall) {
+      const replace = interactive && await tuiYesNo('\nstatusLine ya configurada. ¿Reemplazar?', false);
+      if (!replace) {
+        console.log('  statusLine existente conservada.');
+        return;
+      }
+    }
+    await this.#installStatusline(settings);
+  }
+
+  async #readSettings() {
+    try {
+      return JSON.parse(await readFile(join(cwd(), SETTINGS_PATH), 'utf-8'));
+    } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      throw new Error(`${SETTINGS_PATH} no es JSON válido: ${err.message}`);
+    }
+  }
+
+  async #installStatusline(settings) {
+    const script = await readFile(join(TEMPLATES_DIR, 'claude/statusline.sh'), 'utf-8');
+    await safeWriteFile(STATUSLINE_DST, script);
+    try { await chmod(join(cwd(), STATUSLINE_DST), 0o755); } catch { /* sin bit de exec en Windows */ }
+    settings.statusLine = { type: 'command', command: STATUSLINE_COMMAND };
+    await safeWriteFile(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
+    console.log('  ✓ Statusline instalado.');
+    if (spawnSync('jq', ['--version'], { stdio: 'ignore' }).status !== 0) {
+      console.log('  Aviso: el statusline requiere `jq` instalado.');
+    }
+  }
+
+  async #uninstallStatusline(settings) {
+    await rm(join(cwd(), STATUSLINE_DST), { force: true });
+    if (isPhobosStatusline(settings.statusLine)) {
+      delete settings.statusLine;
+      await safeWriteFile(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
+    }
+    console.log('  ✓ Statusline de Phobos quitado de este proyecto.');
   }
 
   // ─── Detección del CLI ─────────────────────────────────────────────
@@ -379,10 +475,11 @@ export class ClaudeAdapter extends IDEAdapter {
       const tail = lower.slice(slash + 1).replace(/\./g, '-');
       // Si el resto matchea un modelo Claude conocido, usar ese.
       if (CLAUDE_AVAILABLE_MODELS.includes(tail)) return tail;
-      // Si contiene "sonnet", "opus", "haiku" → mapear al alias correspondiente.
+      // Si contiene "sonnet", "opus", "haiku", "fable" → mapear al alias correspondiente.
       if (tail.includes('sonnet')) return 'sonnet';
       if (tail.includes('opus')) return 'opus';
       if (tail.includes('haiku')) return 'haiku';
+      if (tail.includes('fable')) return 'fable';
     }
 
     // Si nada matchea, fallback a inherit (seguro — usa el del main session).

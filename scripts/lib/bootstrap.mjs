@@ -127,7 +127,10 @@ export async function ensureBootstrap(adapter) {
   const missing = await findMissing(adapter);
   const { total } = summarizeMissing(missing);
 
-  if (total === 0) return true;
+  if (total === 0) {
+    await adapter.configureStatusline?.();
+    return true;
+  }
 
   const confirm = await tuiYesNo(
     `\n¿Querés instalar Phobos para ${adapter.displayName} en este proyecto?`,
@@ -138,6 +141,7 @@ export async function ensureBootstrap(adapter) {
   }
 
   await bootstrap(missing, adapter);
+  await adapter.configureStatusline?.(); // solo Claude; OpenCode no lo define
   return true;
 }
 
